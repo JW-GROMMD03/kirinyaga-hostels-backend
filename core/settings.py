@@ -226,15 +226,14 @@ SIMPLE_JWT = {
 # ============================================
 # CORS SETTINGS
 # ============================================
+CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5500",
-    "http://127.0.0.1:5500",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://kirinyaga-hostels.vercel.app",
-    "https://kirinyaga-hostels.netlify.app",
-    "https://*.onrender.com",
-    "https://*.railway.app",
+    'http://localhost:5500',
+    'http://127.0.0.1:5500',
+    'https://student.kirinyagahostels.com',
+    'https://owner.kirinyagahostels.com',
+    'https://admin.kirinyagahostels.com',
+    'https://kyu-hostels.destinymichael941.workers.dev',
 ]
 
 # Add from environment
