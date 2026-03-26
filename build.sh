@@ -1,20 +1,19 @@
 #!/bin/bash
 set -o errexit
 
+echo "🚀 Starting build process..."
+
 # Upgrade pip
 pip install --upgrade pip
 
-# Install wheel and setuptools first
-pip install wheel setuptools
-
-# Install psycopg2-binary explicitly
-pip install psycopg2-binary==2.9.9
-
-# Install all other requirements
+# Install requirements (psycopg 3 installs without compilation!)
 pip install -r requirements.txt
 
-# Run migrations
-python manage.py migrate --noinput
+# Verify database driver installation
+echo "🔍 Verifying database driver installation..."
+python -c "import psycopg; print(f'✓ psycopg version: {psycopg.__version__}')"
 
 # Collect static files
 python manage.py collectstatic --noinput
+
+echo "✅ Build completed successfully!"
