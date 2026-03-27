@@ -57,16 +57,16 @@ INSTALLED_APPS = [
     'apps.subscriptions',
     'apps.chat',  
     'apps.reviews',
-    'corsheaders',
+    
 ]
 
 # ============================================
 # MIDDLEWARE
 # ============================================
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',  # For serving static files
-    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
