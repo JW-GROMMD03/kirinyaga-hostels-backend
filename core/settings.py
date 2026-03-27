@@ -268,30 +268,40 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 
 # ============================================
-# EMAIL CONFIGURATION
+# EMAIL CONFIGURATION - Brevo (Sendinblue) API
 # ============================================
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
-EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', f'Kirinyaga Hostels <{EMAIL_HOST_USER}>')
 
-# Use console backend in development if no credentials
-if not EMAIL_HOST_USER or not EMAIL_HOST_PASSWORD:
+# Use Brevo API via django-anymail (works on Render free tier)
+# Brevo gives 300 free emails/day - perfect for OTP, password reset, etc.
+
+if os.environ.get('RENDER'):
+    # Production - Use Brevo API
+    EMAIL_BACKEND = "anymail.backends.brevo.EmailBackend"
+    ANYMAIL = {
+        "BREVO_API_KEY": os.environ.get('BREVO_API_KEY', ''),
+    }
+    DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@kirinyagahostels.com')
+    
+    # Verify we have the API key
+    if not os.environ.get('BREVO_API_KEY'):
+        print("⚠️ BREVO_API_KEY not set - email will not work!")
+    else:
+        print("📧 Using Brevo email backend with API")
+else:
+    # Local development - use console backend (prints emails to terminal)
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
     DEFAULT_FROM_EMAIL = 'noreply@kirinyagahostels.com'
-    print("⚠️ Email credentials not set. Using console backend.")
+    print("📧 Local development - using console email backend")
 
-print(f"📧 EMAIL BACKEND: {EMAIL_BACKEND}")
-print(f"📧 EMAIL HOST: {EMAIL_HOST}")
-print(f"📧 EMAIL USER: {EMAIL_HOST_USER}")
-
+# Keep these for compatibility
 ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', 'admin@kirinyagahostels.com')
 EMAIL_USE_LOCALTIME = True
 EMAIL_TIMEOUT = 30
 EMAIL_MULTIPART = True
+
+# Print email status for debugging
+print(f"📧 EMAIL BACKEND: {EMAIL_BACKEND}")
+print(f"📧 DEFAULT FROM: {DEFAULT_FROM_EMAIL}")
 
 # ============================================
 # GOOGLE MAPS
