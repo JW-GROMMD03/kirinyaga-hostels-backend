@@ -217,6 +217,19 @@ class OwnerLoginView(APIView):
 class AdminLoginView(APIView):
     permission_classes = [AllowAny]
 
+    def dispatch(self, request, *args, **kwargs):
+        """Add CORS headers to response"""
+        response = super().dispatch(request, *args, **kwargs)
+        response['Access-Control-Allow-Origin'] = 'https://kirinyaga-hostels-frontend.onrender.com'
+        response['Access-Control-Allow-Credentials'] = 'true'
+        response['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response
+
+    def options(self, request, *args, **kwargs):
+        """Handle preflight OPTIONS requests"""
+        return Response(status=status.HTTP_200_OK)
+    
     @method_decorator(ratelimit(key='ip', rate='5/m', method='POST', block=True))
     def post(self, request):
         serializer = AdminLoginSerializer(data=request.data, context={'request': request})

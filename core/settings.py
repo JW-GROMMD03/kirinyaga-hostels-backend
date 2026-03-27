@@ -37,7 +37,7 @@ INSTALLED_APPS = [
     # Third party
     'rest_framework',
     'rest_framework_simplejwt',
-    'corsheaders',
+    'corsheaders',  # Only once!
     'phonenumber_field',
     'anymail',
     'django_filters',
@@ -57,16 +57,15 @@ INSTALLED_APPS = [
     'apps.subscriptions',
     'apps.chat',  
     'apps.reviews',
-    
 ]
 
 # ============================================
 # MIDDLEWARE
 # ============================================
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # Must be FIRST
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',  # For serving static files
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -225,20 +224,22 @@ SIMPLE_JWT = {
 }
 
 # ============================================
-# CORS SETTINGS
+# CORS SETTINGS - FIXED VERSION
 # ============================================
-CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
+# Start with hardcoded defaults
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5500',
     'http://127.0.0.1:5500',
     'https://student.kirinyagahostels.com',
-    "https://kirinyaga-hostels-frontend.onrender.com",
     'https://owner.kirinyagahostels.com',
     'https://admin.kirinyagahostels.com',
     'https://kyu-hostels.destinymichael941.workers.dev',
 ]
 
-# Add from environment
+# Add frontend Render URL
+CORS_ALLOWED_ORIGINS.append('https://kirinyaga-hostels-frontend.onrender.com')
+
+# Add from environment variable (if set)
 env_origins = os.getenv('CORS_ALLOWED_ORIGINS', '')
 if env_origins:
     for origin in env_origins.split(','):
@@ -252,6 +253,9 @@ CORS_ALLOW_HEADERS = [
     'accept', 'accept-encoding', 'authorization', 'content-type',
     'dnt', 'origin', 'user-agent', 'x-csrftoken', 'x-requested-with',
 ]
+
+# Print CORS settings for debugging (will appear in Render logs)
+print(f"🌐 CORS_ALLOWED_ORIGINS: {CORS_ALLOWED_ORIGINS}")
 
 CSRF_TRUSTED_ORIGINS = [origin.rstrip('/') for origin in CORS_ALLOWED_ORIGINS]
 CSRF_COOKIE_SECURE = not DEBUG
