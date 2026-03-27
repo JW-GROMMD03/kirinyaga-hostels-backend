@@ -85,16 +85,27 @@ class SingleSessionMiddleware:
 class IPWhitelistMiddleware:
     """
     Middleware to restrict admin access to specific IP addresses.
+    UPDATED: Fixed to handle OPTIONS requests for CORS preflight
     """
     
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
+        # Handle OPTIONS requests (CORS preflight) - always allow
+        if request.method == 'OPTIONS':
+            response = self.get_response(request)
+            # Add CORS headers to OPTIONS response
+            response['Access-Control-Allow-Origin'] = 'https://kirinyaga-hostels-frontend.onrender.com'
+            response['Access-Control-Allow-Credentials'] = 'true'
+            response['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+            response['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRFToken'
+            return response
+        
         # Get client IP
         client_ip = self.get_client_ip(request)
         
-        # Admin paths to protect
+        # Admin paths to protect (including API admin endpoints)
         admin_paths = [
             '/api/admin/',
             '/admin/',
@@ -102,21 +113,35 @@ class IPWhitelistMiddleware:
             '/admin-dashboard/',
         ]
         
-        # Check if the request path is for admin
-        is_admin_path = any(request.path.startswith(path) for path in admin_paths)
+        # Also check for admin login endpoints - allow them to be accessed even if IP not whitelisted
+        # This is critical because the user isn't authenticated yet at login time
+        admin_login_paths = [
+            '/api/auth/admin/login/',
+            '/api/auth/login/',
+        ]
         
-        # Only check for admin paths
+        # Check if this is an admin login attempt
+        is_admin_login = any(request.path == path for path in admin_login_paths) or \
+                         any(request.path.startswith(path) for path in admin_login_paths)
+        
+        # Check if the request path is for admin (excluding login)
+        is_admin_path = any(request.path.startswith(path) for path in admin_paths) and not is_admin_login
+        
+        # Only check for admin paths (not login)
         if not is_admin_path:
             return self.get_response(request)
         
         # Get whitelisted IPs from settings
         whitelisted_ips = getattr(settings, 'ADMIN_ALLOWED_IPS', [])
         
-        # If no whitelist configured, allow all
+        # Clean up any empty strings
+        whitelisted_ips = [ip.strip() for ip in whitelisted_ips if ip and ip.strip()]
+        
+        # If no whitelist configured, allow all (with logging)
         if not whitelisted_ips:
             # Still log admin access for audit
             if request.user.is_authenticated:
-                logger.info(f"Admin access from IP {client_ip} (no whitelist)")
+                logger.info(f"Admin access from IP {client_ip} (no whitelist configured)")
             return self.get_response(request)
         
         # Check if IP is whitelisted
@@ -134,7 +159,8 @@ class IPWhitelistMiddleware:
                         details={
                             'path': request.path,
                             'method': request.method,
-                            'reason': 'IP not whitelisted'
+                            'reason': 'IP not whitelisted',
+                            'whitelisted_ips': whitelisted_ips
                         }
                     )
                 else:
@@ -147,13 +173,14 @@ class IPWhitelistMiddleware:
                         details={
                             'path': request.path,
                             'method': request.method,
-                            'reason': 'IP not whitelisted (unauthenticated)'
+                            'reason': 'IP not whitelisted (unauthenticated)',
+                            'whitelisted_ips': whitelisted_ips
                         }
                     )
             except Exception as e:
                 logger.error(f"Failed to log IP denial: {e}")
             
-            # Return 403 Forbidden
+            # Return 403 Forbidden with JSON response
             return JsonResponse({
                 'error': 'Access Denied',
                 'message': 'Your IP address is not authorized to access the admin panel.',
