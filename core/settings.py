@@ -112,7 +112,7 @@ if DATABASE_URL:
     # Production database (Supabase, Render PostgreSQL, etc.)
     DATABASES = {
         'default': dj_database_url.config(
-            default=DATABASE_URL,
+            default=os.environ.get('DATABASE_URL'),,
             conn_max_age=600,
             ssl_require=True
         )
@@ -231,6 +231,7 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:5500',
     'http://127.0.0.1:5500',
     'https://student.kirinyagahostels.com',
+    "https://kirinyaga-hostels-frontend.onrender.com",
     'https://owner.kirinyagahostels.com',
     'https://admin.kirinyagahostels.com',
     'https://kyu-hostels.destinymichael941.workers.dev',
