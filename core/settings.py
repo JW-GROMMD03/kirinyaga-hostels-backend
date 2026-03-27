@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'apps.subscriptions',
     'apps.chat',  
     'apps.reviews',
+    'corsheaders',
 ]
 
 # ============================================
