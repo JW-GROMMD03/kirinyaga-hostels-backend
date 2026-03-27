@@ -228,7 +228,7 @@ SIMPLE_JWT = {
 # ============================================
 # Start with hardcoded defaults
 CORS_ALLOWED_ORIGINS = [
-    'https://kirinyaga-hostels-frontend.onrender.com'
+    'https://kirinyaga-hostels-frontend.onrender.com',
     'http://localhost:5500',
     'http://127.0.0.1:5500',
     'https://student.kirinyagahostels.com',
