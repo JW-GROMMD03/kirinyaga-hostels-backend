@@ -235,6 +235,7 @@ CORS_ALLOWED_ORIGINS = [
     'https://owner.kirinyagahostels.com',
     'https://admin.kirinyagahostels.com',
     'https://kyu-hostels.destinymichael941.workers.dev',
+    'https://kirinyaga-hostels-backend.onrender.com',
 ]
 
 # Add frontend Render URL
