@@ -2,6 +2,9 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    # ==================== ADMIN ENDPOINTS ====================
+    path('', views.AdminBookingListView.as_view(), name='admin-bookings'),
+    
     # Student endpoints
     path('student/', views.StudentBookingListView.as_view(), name='student-bookings'),
     path('create/', views.BookingCreateView.as_view(), name='create-booking'),

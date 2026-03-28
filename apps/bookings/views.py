@@ -7,6 +7,12 @@ from datetime import timedelta
 from .models import Booking
 from .serializers import BookingSerializer, BookingCreateSerializer
 from apps.accounts.models import User
+from apps.accounts.views_admin import IsAdminUser
+
+# Helper permission for admin
+class IsAdminUser(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and (request.user.role == 'admin' or request.user.is_superuser)
 
 class IsStudentOrAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
@@ -14,6 +20,38 @@ class IsStudentOrAdmin(permissions.BasePermission):
             request.user.role == 'student' or request.user.role == 'admin' or request.user.is_superuser
         )
 
+
+# ==================== ADMIN ENDPOINTS ====================
+
+class AdminBookingListView(generics.ListAPIView):
+    """
+    List all bookings for admin dashboard.
+    Endpoint: /api/bookings/
+    """
+    permission_classes = [IsAdminUser]
+    serializer_class = BookingSerializer
+
+    def get_queryset(self):
+        queryset = Booking.objects.select_related('student', 'hostel').order_by('-created_at')
+        
+        # Search by user email, name, or hostel name
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(student__email__icontains=search) |
+                Q(student__full_name__icontains=search) |
+                Q(hostel__name__icontains=search)
+            )
+        
+        # Filter by status
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        return queryset
+
+
+# ==================== STUDENT ENDPOINTS ====================
 
 class StudentBookingListView(generics.ListAPIView):
     """List bookings for the authenticated student (or all for admin)"""
@@ -82,7 +120,7 @@ class HostelBookingsView(generics.ListAPIView):
         return Booking.objects.none()
 
 
-# ==================== NEW VIEWS FOR OWNER DASHBOARD ====================
+# ==================== OWNER DASHBOARD ENDPOINTS ====================
 
 class OwnerBookingsSummaryView(APIView):
     """Get booking summary for the current owner (hostel owner)"""
