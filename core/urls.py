@@ -3,7 +3,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from django.http import HttpResponse
-from apps.accounts.views import SupportView, AdminProfileView
+from apps.accounts.views import SupportView, AdminProfileView, UserProfileView  # Add UserProfileView here
 from apps.accounts import views_admin
 from apps.accounts.views_admin import (
     AdminProfileUpdateView,
@@ -12,7 +12,7 @@ from apps.accounts.views_admin import (
     ImpersonateStartView,
     ImpersonateStopView,
     NewsletterSubscribeView,
-    UserProfileView,
+    
 )
 
 def home(request):
