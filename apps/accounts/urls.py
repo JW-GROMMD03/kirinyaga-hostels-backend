@@ -1,4 +1,5 @@
 from django.urls import path
+from apps.bookings import views as bookings_views
 from .views import (
     StudentSignupView, OwnerSignupView,
     StudentLoginView, OwnerLoginView, AdminLoginView,
@@ -41,6 +42,7 @@ urlpatterns = [
     # ==================== ADMIN DASHBOARD ENDPOINTS (without /admin/ prefix for cleaner URLs) ====================
     # Dashboard
     path('dashboard/stats/', views_admin.DashboardStatsView.as_view(), name='admin-dashboard-stats'),
+    path('bookings/', bookings_views.AdminBookingListView.as_view(), name='admin-bookings'),
     
     # User Management
     path('students/', views_admin.StudentListView.as_view(), name='admin-students'),

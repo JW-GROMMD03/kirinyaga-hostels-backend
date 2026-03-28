@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
+from apps.accounts.views import UserProfileView 
 from django.conf.urls.static import static
 from django.http import HttpResponse
 from apps.accounts.views import SupportView, AdminProfileView, UserProfileView  # Add UserProfileView here
