@@ -10,7 +10,9 @@ from apps.accounts.views_admin import (
     AnnouncementActiveView,
     SmsBalanceView,
     ImpersonateStartView,
+    ImpersonateStopView,
     NewsletterSubscribeView,
+    UserProfileView,
 )
 
 def home(request):
@@ -23,7 +25,6 @@ urlpatterns = [
     # ==================== ROOT-LEVEL ADMIN ENDPOINTS (for frontend dashboard) ====================
     # Dashboard Stats
     path('api/dashboard/stats/', views_admin.DashboardStatsView.as_view(), name='dashboard-stats'),
-    path('api/auth/bookings/', include('apps.bookings.urls')), 
     
     # User Management
     path('api/students/', views_admin.StudentListView.as_view(), name='students'),
@@ -60,7 +61,7 @@ urlpatterns = [
     
     # Impersonation
     path('api/impersonate/start/', views_admin.ImpersonateStartView.as_view(), name='impersonate-start'),
-    path('api/impersonate/stop/', views_admin.ImpersonateStopView.as_view(), name='impersonate-stop'),
+    path('api/impersonate/stop/', ImpersonateStopView.as_view(), name='impersonate-stop'),
     
     # SMS Balance
     path('api/sms/balance/', views_admin.SmsBalanceView.as_view(), name='sms-balance'),
@@ -98,6 +99,10 @@ urlpatterns = [
     # Admin Profile
     path('api/admin/auth/profile/', AdminProfileView.as_view(), name='admin-profile'),
     path('api/admin/auth/profile/update/', AdminProfileUpdateView.as_view(), name='admin-profile-update'),
+    
+    # User Profile (for admin to view own profile)
+    path('api/auth/profile/', UserProfileView.as_view(), name='profile'),
+    path('api/auth/profile/update/', AdminProfileUpdateView.as_view(), name='profile-update'),
     
     # Admin Announcements
     path('api/admin/announcements/active/', AnnouncementActiveView.as_view(), name='announcement-active'),

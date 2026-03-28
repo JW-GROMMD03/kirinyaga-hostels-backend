@@ -1833,20 +1833,22 @@ class SmsBalanceView(APIView):
             from twilio.rest import Client
             
             if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
-                return Response({'error': 'Twilio not configured'}, status=500)
+                return Response({'balance': 0, 'currency': 'USD', 'error': 'Twilio not configured'}, status=200)
             
             client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
             balance = client.balance.fetch()
-            
             return Response({
                 'balance': balance.balance,
                 'currency': balance.currency
             })
-        except ImportError:
-            return Response({'error': 'Twilio library not installed'}, status=500)
         except Exception as e:
             logger.error(f"Error fetching SMS balance: {e}")
-            return Response({'error': str(e)}, status=500)
+            # Return 200 with error message instead of 500
+            return Response({
+                'balance': 0,
+                'currency': 'USD',
+                'error': str(e)
+            }, status=200)
 
 # ==================== IMPERSONATION ====================
 class ImpersonateStartView(APIView):
