@@ -1678,11 +1678,16 @@ class AnnouncementActiveView(APIView):
         return Response({})
 
 class SmsBalanceView(APIView):
+    """Get Twilio SMS balance"""
     permission_classes = [IsAdminUser]
-    
+
     def get(self, request):
-        from twilio.rest import Client
         try:
+            from twilio.rest import Client
+            
+            if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
+                return Response({'balance': 0, 'currency': 'USD', 'error': 'Twilio not configured'}, status=200)
+            
             client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
             balance = client.balance.fetch()
             return Response({
@@ -1690,7 +1695,13 @@ class SmsBalanceView(APIView):
                 'currency': balance.currency
             })
         except Exception as e:
-            return Response({'error': str(e)}, status=500)
+            logger.error(f"Error fetching SMS balance: {e}")
+            # Return default response instead of 500 error
+            return Response({
+                'balance': 0,
+                'currency': 'USD',
+                'error': str(e)
+            }, status=200)
 
 # ==================== ADMIN PROFILE UPDATE ====================
 class AdminProfileUpdateView(APIView):

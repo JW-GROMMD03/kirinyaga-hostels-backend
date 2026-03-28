@@ -23,6 +23,7 @@ urlpatterns = [
     # ==================== ROOT-LEVEL ADMIN ENDPOINTS (for frontend dashboard) ====================
     # Dashboard Stats
     path('api/dashboard/stats/', views_admin.DashboardStatsView.as_view(), name='dashboard-stats'),
+    path('api/auth/bookings/', include('apps.bookings.urls')), 
     
     # User Management
     path('api/students/', views_admin.StudentListView.as_view(), name='students'),
