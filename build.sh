@@ -6,10 +6,10 @@ echo "🚀 Starting build process..."
 # Upgrade pip
 pip install --upgrade pip
 
-# Install requirements (psycopg 3 installs without compilation!)
+# Install requirements
 pip install -r requirements.txt
 
-# Verify database driver installation
+# Verify database driver
 echo "🔍 Verifying database driver installation..."
 python -c "import psycopg; print(f'✓ psycopg version: {psycopg.__version__}')"
 
