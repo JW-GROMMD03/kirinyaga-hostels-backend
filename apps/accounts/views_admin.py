@@ -1,3 +1,6 @@
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 import logging
 from datetime import timedelta, datetime
 from django.utils import timezone
@@ -12,6 +15,7 @@ from django.contrib.sessions.models import Session
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.decorators import api_view, permission_classes
 
@@ -67,11 +71,17 @@ class AdminProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        avatar_url = None
+        if hasattr(request.user, 'avatar') and request.user.avatar:
+            avatar_url = request.user.avatar
         return Response({
-            'id': request.user.id,
+            'id': str(request.user.id),
             'full_name': request.user.full_name,
             'email': request.user.email,
             'role': request.user.role,
+            'is_superuser': request.user.is_superuser,
+            'is_staff': request.user.is_staff,
+            'avatar_url': avatar_url
         })
 
 # Helper function to get client IP
@@ -1661,6 +1671,91 @@ class AdminProfileUpdateView(APIView):
             'full_name': user.full_name,
             'email': user.email
         })
+
+# ==================== AVATAR UPLOAD (Cloudinary) ====================
+class AdminProfileAvatarUpdateView(APIView):
+    """Update admin profile avatar using Cloudinary"""
+    permission_classes = [IsAdminUser]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        user = request.user
+        avatar_file = request.FILES.get('avatar')
+        
+        if not avatar_file:
+            return Response({'error': 'No avatar file provided'}, status=400)
+        
+        if not avatar_file.content_type.startswith('image/'):
+            return Response({'error': 'File must be an image'}, status=400)
+        
+        if avatar_file.size > 2 * 1024 * 1024:
+            return Response({'error': 'Image must be less than 2MB'}, status=400)
+        
+        try:
+            upload_result = cloudinary.uploader.upload(
+                avatar_file,
+                folder=f'admin_avatars/{user.id}',
+                public_id=f'avatar_{user.id}',
+                overwrite=True,
+                transformation=[
+                    {'width': 300, 'height': 300, 'crop': 'fill', 'gravity': 'face'},
+                    {'quality': 'auto'}
+                ]
+            )
+            
+            avatar_url = upload_result.get('secure_url')
+            public_id = upload_result.get('public_id')
+            
+            if hasattr(user, 'avatar'):
+                user.avatar = avatar_url
+                user.avatar_public_id = public_id
+                user.save()
+                
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='UPDATE_AVATAR',
+                    ip_address=get_client_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                    details={'status': 'success', 'public_id': public_id}
+                )
+                
+                return Response({
+                    'status': 'success',
+                    'message': 'Avatar updated successfully',
+                    'avatar_url': avatar_url
+                })
+            else:
+                return Response({
+                    'status': 'success',
+                    'message': 'Avatar uploaded to Cloudinary',
+                    'avatar_url': avatar_url
+                })
+        except Exception as e:
+            logger.error(f"Error uploading avatar to Cloudinary: {e}")
+            return Response({'error': str(e)}, status=500)
+
+    def delete(self, request):
+        user = request.user
+        try:
+            if hasattr(user, 'avatar_public_id') and user.avatar_public_id:
+                cloudinary.uploader.destroy(user.avatar_public_id)
+                user.avatar = None
+                user.avatar_public_id = None
+                user.save()
+                
+                AuditLog.objects.create(
+                    user=request.user,
+                    action='DELETE_AVATAR',
+                    ip_address=get_client_ip(request),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                    details={'status': 'success'}
+                )
+                return Response({'status': 'success', 'message': 'Avatar deleted successfully'})
+            else:
+                return Response({'status': 'success', 'message': 'No avatar to delete'})
+        except Exception as e:
+            logger.error(f"Error deleting avatar from Cloudinary: {e}")
+            return Response({'error': str(e)}, status=500)        
 
 class AnnouncementActiveView(APIView):
     permission_classes = [IsAdminUser]

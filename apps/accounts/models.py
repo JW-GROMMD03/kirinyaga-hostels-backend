@@ -65,6 +65,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     # Session tracking for single-device login
     current_session_token = models.CharField(max_length=255, blank=True, null=True)
     last_session_created = models.DateTimeField(null=True, blank=True)
+    avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
+    avatar = models.URLField(max_length=500, null=True, blank=True)
+    avatar_public_id = models.CharField(max_length=255, null=True, blank=True)
     
     objects = UserManager()
     
