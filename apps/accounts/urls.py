@@ -35,9 +35,64 @@ urlpatterns = [
     
     # Profile
     path('profile/', UserProfileView.as_view(), name='profile'),
+    path('profile/update/', views_admin.AdminProfileUpdateView.as_view(), name='admin-profile-update'),
     path('support/', SupportView.as_view(), name='support'),
     
-    # ==================== ADMIN API ENDPOINTS ====================
+    # ==================== ADMIN DASHBOARD ENDPOINTS (without /admin/ prefix for cleaner URLs) ====================
+    # Dashboard
+    path('dashboard/stats/', views_admin.DashboardStatsView.as_view(), name='admin-dashboard-stats'),
+    
+    # User Management
+    path('students/', views_admin.StudentListView.as_view(), name='admin-students'),
+    path('students/<uuid:pk>/', views_admin.StudentDetailView.as_view(), name='admin-student-detail'),
+    path('owners/', views_admin.OwnerListView.as_view(), name='admin-owners'),
+    path('owners/<uuid:pk>/', views_admin.OwnerDetailView.as_view(), name='admin-owner-detail'),
+    path('owners/<uuid:owner_id>/approve/', views_admin.ApproveOwnerView.as_view(), name='admin-approve-owner'),
+    path('owners/<uuid:owner_id>/toggle-verified/', views_admin.ToggleVerifiedBadgeView.as_view(), name='admin-toggle-verified'),
+    
+    # User Actions
+    path('users/<uuid:user_id>/toggle-status/', views_admin.ToggleUserStatusView.as_view(), name='admin-toggle-status'),
+    path('users/<uuid:user_id>/delete/', views_admin.DeleteUserView.as_view(), name='admin-delete-user'),
+    path('users/<uuid:user_id>/unlock/', views_admin.UnlockUserView.as_view(), name='admin-unlock-user'),
+    path('users/<uuid:user_id>/update-fraud-score/', views_admin.UpdateFraudScoreView.as_view(), name='admin-update-fraud'),
+    path('users/high-risk/', views_admin.HighRiskUsersView.as_view(), name='admin-high-risk'),
+    
+    # Hostel Management
+    path('hostels/', views_admin.AdminHostelListView.as_view(), name='admin-hostels'),
+    path('hostels/<uuid:pk>/', views_admin.AdminHostelDetailView.as_view(), name='admin-hostel-detail'),
+    path('hostels/<uuid:hostel_id>/approve/', views_admin.AdminApproveHostelView.as_view(), name='admin-approve-hostel'),
+    path('hostels/<uuid:hostel_id>/toggle-featured/', views_admin.AdminToggleFeaturedView.as_view(), name='admin-toggle-featured'),
+    path('hostels/<uuid:hostel_id>/delete/', views_admin.AdminDeleteHostelView.as_view(), name='admin-delete-hostel'),
+    path('featured-hostels/', views_admin.FeaturedHostelsView.as_view(), name='admin-featured-hostels'),
+    
+    # Analytics
+    path('analytics/users/', views_admin.UserAnalyticsView.as_view(), name='admin-user-analytics'),
+    path('analytics/hostels/', views_admin.HostelAnalyticsView.as_view(), name='admin-hostel-analytics'),
+    
+    # Security
+    path('audit-logs/', views_admin.AuditLogListView.as_view(), name='admin-audit-logs'),
+    path('fraud-alerts/', views_admin.FraudAlertsView.as_view(), name='admin-fraud-alerts'),
+    path('sessions/', views_admin.ActiveSessionsView.as_view(), name='admin-sessions'),
+    
+    # Settings
+    path('settings/', views_admin.SystemSettingsView.as_view(), name='admin-settings'),
+    
+    # Impersonation
+    path('impersonate/start/', views_admin.ImpersonateStartView.as_view(), name='admin-impersonate-start'),
+    path('impersonate/stop/', views_admin.ImpersonateStopView.as_view(), name='admin-impersonate-stop'),
+    
+    # Notifications
+    path('notifications/', views_admin.NotificationListView.as_view(), name='admin-notifications'),
+    path('notifications/<int:notification_id>/mark-read/', views_admin.MarkNotificationReadView.as_view(), name='admin-mark-read'),
+    path('notifications/send-bulk/', views_admin.SendBulkNotificationView.as_view(), name='admin-send-bulk'),
+    
+    # SMS Balance
+    path('sms/balance/', views_admin.SmsBalanceView.as_view(), name='admin-sms-balance'),
+    
+    # Announcements
+    path('announcements/active/', views_admin.AnnouncementActiveView.as_view(), name='admin-announcement-active'),
+    
+    # ==================== EXISTING ADMIN API ENDPOINTS (keeping your existing ones) ====================
     path('admin/dashboard/stats/', views_admin.DashboardStatsView.as_view(), name='admin_dashboard_stats'),
     path('admin/students/', views_admin.StudentListView.as_view(), name='admin_students'),
     path('admin/students/<uuid:pk>/', views_admin.StudentDetailView.as_view(), name='admin_student_detail'),
