@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from django.http import HttpResponse
 from apps.accounts.views import SupportView, AdminProfileView
 from apps.accounts.views_admin import (
     AdminProfileUpdateView,
@@ -11,7 +12,10 @@ from apps.accounts.views_admin import (
     NewsletterSubscribeView,
 )
 
+def home(request):
+    return HttpResponse("Kirinyaga Hostels API is running!")
 urlpatterns = [
+    path('', home, name='home'),
     path('admin/', admin.site.urls),
     path('api/auth/', include('apps.accounts.urls')),
     path('api/admin/', include('apps.accounts.urls_admin')),
