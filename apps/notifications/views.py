@@ -1,13 +1,14 @@
 import os
 import logging
-from rest_framework import generics, permissions
+from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework import status
 from django.core.mail import send_mail, EmailMultiAlternatives
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import models
+from django.utils import timezone
+from datetime import timedelta
 from .models import Notification
 from .serializers import NotificationSerializer
 from twilio.rest import Client
@@ -18,15 +19,39 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
+def get_client_ip(request):
+    """Get client IP address from request"""
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0]
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    return ip
+
+
 class NotificationListView(generics.ListAPIView):
+    """List all notifications for the authenticated user with auto-cleanup"""
     serializer_class = NotificationSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        # Auto-cleanup: Delete notifications older than 7 days before returning
+        self.cleanup_old_notifications()
         return Notification.objects.filter(user=self.request.user).order_by('-created_at')
+    
+    def cleanup_old_notifications(self):
+        """Delete notifications older than 7 days for this user"""
+        cutoff_date = timezone.now() - timedelta(days=7)
+        deleted_count, _ = Notification.objects.filter(
+            user=self.request.user,
+            created_at__lt=cutoff_date
+        ).delete()
+        if deleted_count > 0:
+            logger.info(f"Auto-deleted {deleted_count} old notifications for user {self.request.user.email}")
 
 
 class MarkNotificationReadView(APIView):
+    """Mark a notification as read"""
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
@@ -39,10 +64,9 @@ class MarkNotificationReadView(APIView):
             return Response({'error': 'Not found'}, status=404)
 
 
-# ==================== NOTIFICATION DELETE ====================
 class NotificationDeleteView(APIView):
-    """Delete a notification"""
-    permission_classes = [IsAuthenticated]
+    """Delete a notification (used by auto-cleanup)"""
+    permission_classes = [permissions.IsAuthenticated]
 
     def delete(self, request, pk):
         try:
@@ -54,15 +78,6 @@ class NotificationDeleteView(APIView):
                     {'error': 'Permission denied'},
                     status=status.HTTP_403_FORBIDDEN
                 )
-            
-            # Log the action
-            AuditLog.objects.create(
-                user=request.user,
-                action='DELETE_NOTIFICATION',
-                ip_address=get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                details={'notification_id': str(pk), 'title': notification.title}
-            )
             
             notification.delete()
             
@@ -81,57 +96,7 @@ class NotificationDeleteView(APIView):
                 {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
-def get_client_ip(request):
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(',')[0]
-    else:
-        ip = request.META.get('REMOTE_ADDR')
-    return ip       
 
-# ==================== DELETE NOTIFICATION ====================
-class DeleteNotificationView(APIView):
-    """Delete a notification"""
-    permission_classes = [IsAuthenticated]
-
-    def delete(self, request, notification_id):
-        try:
-            notification = Notification.objects.get(id=notification_id)
-            
-            # Check permission: user must own the notification or be admin
-            if notification.user != request.user and request.user.role != 'admin' and not request.user.is_superuser:
-                return Response(
-                    {'error': 'You do not have permission to delete this notification'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            
-            # Log the action before deletion
-            AuditLog.objects.create(
-                user=request.user,
-                action='DELETE_NOTIFICATION',
-                ip_address=get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                details={'notification_id': str(notification_id), 'title': notification.title}
-            )
-            
-            notification.delete()
-            
-            return Response(
-                {'status': 'success', 'message': 'Notification deleted successfully'},
-                status=status.HTTP_200_OK
-            )
-        except Notification.DoesNotExist:
-            return Response(
-                {'error': 'Notification not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        except Exception as e:
-            logger.error(f"Error deleting notification {notification_id}: {e}")
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
 
 class SendBulkNotificationView(APIView):
     """
@@ -145,8 +110,6 @@ class SendBulkNotificationView(APIView):
             print(f"\n📧 Sending notification email to: {to_email}")
             print(f"   Subject: {subject}")
             print(f"   From: {settings.DEFAULT_FROM_EMAIL}")
-            print(f"   Email Host: {settings.EMAIL_HOST}")
-            print(f"   Email User: {settings.EMAIL_HOST_USER}")
             
             # Create HTML email content
             html_content = f"""
@@ -350,9 +313,6 @@ class SendBulkNotificationView(APIView):
         print(f"📢 Channel: {channel}")
         print(f"👥 User Type: {user_type}")
         print(f"📏 Message length: {len(message)} characters")
-        print(f"📧 Email Backend: {settings.EMAIL_BACKEND}")
-        print(f"📧 Email Host: {settings.EMAIL_HOST}")
-        print(f"📧 Email User: {settings.EMAIL_HOST_USER}")
         print("="*60)
         
         # Validate required fields

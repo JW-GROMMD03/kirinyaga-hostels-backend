@@ -27,6 +27,15 @@ class Notification(models.Model):
     
     def __str__(self):
         return f"{self.user.email} - {self.title}"
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    @classmethod
+    def cleanup_old_notifications(cls, days=7):
+        """Delete notifications older than specified days"""
+        cutoff_date = timezone.now() - timedelta(days=days)
+        deleted_count, _ = cls.objects.filter(created_at__lt=cutoff_date).delete()
+        return deleted_count
 
 class EmailLog(models.Model):
     recipient = models.EmailField()
