@@ -1,6 +1,7 @@
 from django.urls import path
 from apps.bookings import views as bookings_views
 from .views import (
+    
     StudentSignupView, OwnerSignupView,
     StudentLoginView, OwnerLoginView, AdminLoginView,
     VerifyEmailView, ResendVerificationView, LogoutView,
@@ -38,6 +39,7 @@ urlpatterns = [
     path('profile/', UserProfileView.as_view(), name='profile'),
     path('profile/update/', views_admin.AdminProfileUpdateView.as_view(), name='admin-profile-update'),
     path('support/', SupportView.as_view(), name='support'),
+    path('profile/avatar/', views_admin.AdminProfileAvatarUpdateView.as_view(), name='profile-avatar'),
     
     # ==================== ADMIN DASHBOARD ENDPOINTS (without /admin/ prefix for cleaner URLs) ====================
     # Dashboard
@@ -145,4 +147,5 @@ urlpatterns = [
     path('admin/test/mpesa/', views_admin.TestMpesaView.as_view(), name='admin_test_mpesa'),
     path('admin/error-logs/', views_admin.ErrorLogsView.as_view(), name='admin_error_logs'),
     path('activity-logs/', OwnerActivityLogView.as_view(), name='owner-activity-logs'),
-]
+    path('users/<uuid:user_id>/verify/', views_admin.VerifyUserView.as_view(), name='admin-verify-user'),
+]   

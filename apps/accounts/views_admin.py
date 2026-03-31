@@ -1945,6 +1945,59 @@ class SmsBalanceView(APIView):
                 'error': str(e)
             }, status=200)
 
+# ==================== VERIFY USER ====================
+class VerifyUserView(APIView):
+    """Verify a student's email (admin action)"""
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, user_id):
+        try:
+            user = User.objects.get(id=user_id)
+            
+            # Only students can be verified by admin
+            if user.role != 'student':
+                return Response(
+                    {'error': 'Only student accounts can be verified by admin'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if user.email_verified:
+                return Response(
+                    {'error': 'User already verified'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Verify the user
+            user.email_verified = True
+            user.email_verification_token = ''
+            user.save()
+            
+            # Log the action
+            AuditLog.objects.create(
+                user=request.user,
+                action='VERIFY_USER',
+                ip_address=get_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                details={'user_id': str(user_id), 'email': user.email}
+            )
+            
+            return Response({
+                'status': 'success', 
+                'message': f'Student {user.full_name} verified successfully'
+            })
+            
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'User not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error verifying user: {e}")
+            return Response(
+                {'error': str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 # ==================== IMPERSONATION ====================
 class ImpersonateStartView(APIView):
     """Start impersonating a user"""
