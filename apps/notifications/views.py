@@ -39,42 +39,99 @@ class MarkNotificationReadView(APIView):
             return Response({'error': 'Not found'}, status=404)
 
 
+# ==================== NOTIFICATION DELETE ====================
 class NotificationDeleteView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    """Delete a notification"""
+    permission_classes = [IsAuthenticated]
 
     def delete(self, request, pk):
-        print(f"=== DELETE ATTEMPT ===")
-        print(f"User: {request.user.email}")
-        print(f"User ID: {request.user.id}")
-        print(f"Is Staff: {request.user.is_staff}")
-        print(f"Notification ID: {pk}")
-        
         try:
-            # First check if notification exists at all
-            notification_exists = Notification.objects.filter(id=pk).exists()
-            print(f"Notification exists in DB: {notification_exists}")
+            notification = Notification.objects.get(id=pk)
             
-            if notification_exists:
-                # Check if it belongs to current user
-                user_has_notification = Notification.objects.filter(id=pk, user=request.user).exists()
-                print(f"Belongs to current user: {user_has_notification}")
+            # Check if user owns this notification or is admin
+            if notification.user != request.user and request.user.role != 'admin' and not request.user.is_superuser:
+                return Response(
+                    {'error': 'Permission denied'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
             
-            # Allow staff/superusers to delete any notification
-            if request.user.is_staff or request.user.is_superuser:
-                print("Staff user - attempting to delete")
-                notification = Notification.objects.get(id=pk)
-            else:
-                print("Regular user - can only delete own notifications")
-                notification = Notification.objects.get(id=pk, user=request.user)
+            # Log the action
+            AuditLog.objects.create(
+                user=request.user,
+                action='DELETE_NOTIFICATION',
+                ip_address=get_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                details={'notification_id': str(pk), 'title': notification.title}
+            )
             
             notification.delete()
-            print("=== DELETE SUCCESS ===")
-            return Response({'status': 'deleted'}, status=204)
             
-        except Notification.DoesNotExist as e:
-            print(f"=== DELETE FAILED: {e} ===")
-            return Response({'error': 'Notification not found'}, status=404)
+            return Response(
+                {'status': 'success', 'message': 'Notification deleted'},
+                status=status.HTTP_200_OK
+            )
+        except Notification.DoesNotExist:
+            return Response(
+                {'error': 'Notification not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error deleting notification: {e}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+def get_client_ip(request):
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0]
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    return ip       
 
+# ==================== DELETE NOTIFICATION ====================
+class DeleteNotificationView(APIView):
+    """Delete a notification"""
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, notification_id):
+        try:
+            notification = Notification.objects.get(id=notification_id)
+            
+            # Check permission: user must own the notification or be admin
+            if notification.user != request.user and request.user.role != 'admin' and not request.user.is_superuser:
+                return Response(
+                    {'error': 'You do not have permission to delete this notification'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            # Log the action before deletion
+            AuditLog.objects.create(
+                user=request.user,
+                action='DELETE_NOTIFICATION',
+                ip_address=get_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                details={'notification_id': str(notification_id), 'title': notification.title}
+            )
+            
+            notification.delete()
+            
+            return Response(
+                {'status': 'success', 'message': 'Notification deleted successfully'},
+                status=status.HTTP_200_OK
+            )
+        except Notification.DoesNotExist:
+            return Response(
+                {'error': 'Notification not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error deleting notification {notification_id}: {e}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class SendBulkNotificationView(APIView):
     """
