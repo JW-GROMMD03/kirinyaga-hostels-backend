@@ -654,3 +654,49 @@ class AdminProfileView(APIView):
             'is_superuser': request.user.is_superuser,
             'is_staff': request.user.is_staff,
         }, status=status.HTTP_200_OK)
+
+
+class OwnerProfileUpdateView(APIView):
+    """Update owner profile information"""
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request):
+        user = request.user
+        
+        # Only allow owners to update their own profile
+        if user.role != 'owner':
+            return Response({'error': 'Only owners can use this endpoint'}, status=403)
+        
+        data = request.data
+        
+        # Update name and email
+        if 'full_name' in data:
+            user.full_name = data['full_name']
+        if 'email' in data:
+            if User.objects.exclude(id=user.id).filter(email=data['email']).exists():
+                return Response({'error': 'Email already in use'}, status=400)
+            user.email = data['email']
+        
+        # Update password if provided
+        if 'new_password' in data and data['new_password']:
+            if not user.check_password(data.get('current_password', '')):
+                return Response({'error': 'Current password is incorrect'}, status=400)
+            user.set_password(data['new_password'])
+        
+        user.save()
+        
+        # Log the action
+        AuditLog.objects.create(
+            user=request.user,
+            action='UPDATE_OWNER_PROFILE',
+            ip_address=get_client_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            details={'updated_fields': list(data.keys())}
+        )
+        
+        return Response({
+            'id': str(user.id),
+            'full_name': user.full_name,
+            'email': user.email,
+            'role': user.role
+        })

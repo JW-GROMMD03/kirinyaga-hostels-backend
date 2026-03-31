@@ -40,6 +40,7 @@ urlpatterns = [
     path('profile/update/', views_admin.AdminProfileUpdateView.as_view(), name='admin-profile-update'),
     path('support/', SupportView.as_view(), name='support'),
     path('profile/avatar/', views_admin.AdminProfileAvatarUpdateView.as_view(), name='profile-avatar'),
+    path('owner/profile/update/', views.OwnerProfileUpdateView.as_view(), name='owner-profile-update'),
     
     # ==================== ADMIN DASHBOARD ENDPOINTS (without /admin/ prefix for cleaner URLs) ====================
     # Dashboard
