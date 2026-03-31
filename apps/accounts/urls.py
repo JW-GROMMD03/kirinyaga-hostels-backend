@@ -2,7 +2,6 @@ from django.urls import path
 from . import views 
 from apps.bookings import views as bookings_views
 from .views import (
-    
     StudentSignupView, OwnerSignupView,
     StudentLoginView, OwnerLoginView, AdminLoginView,
     VerifyEmailView, ResendVerificationView, LogoutView,
@@ -10,7 +9,7 @@ from .views import (
     TwoFactorOTPSendView, TwoFactorOTPVerifyView,
     TwoFactorStatusView, TwoFactorEnableRequestView, TwoFactorEnableConfirmView,
     TwoFactorDisableView, TwoFactorDisableConfirmView, OwnerActivityLogView,
-    UserProfileView, SupportView
+    UserProfileView, SupportView, OwnerProfileUpdateView  # Added OwnerProfileUpdateView here
 )
 from . import views_admin
 
@@ -41,9 +40,11 @@ urlpatterns = [
     path('profile/update/', views_admin.AdminProfileUpdateView.as_view(), name='admin-profile-update'),
     path('support/', SupportView.as_view(), name='support'),
     path('profile/avatar/', views_admin.AdminProfileAvatarUpdateView.as_view(), name='profile-avatar'),
-    path('owner/profile/update/', views.OwnerProfileUpdateView.as_view(), name='owner-profile-update'),
     
-    # ==================== ADMIN DASHBOARD ENDPOINTS (without /admin/ prefix for cleaner URLs) ====================
+    # Owner Profile Update - Now properly imported
+    path('owner/profile/update/', OwnerProfileUpdateView.as_view(), name='owner-profile-update'),
+    
+    # ==================== ADMIN DASHBOARD ENDPOINTS ====================
     # Dashboard
     path('dashboard/stats/', views_admin.DashboardStatsView.as_view(), name='admin-dashboard-stats'),
     path('bookings/', bookings_views.AdminBookingListView.as_view(), name='admin-bookings'),
@@ -98,7 +99,7 @@ urlpatterns = [
     # Announcements
     path('announcements/active/', views_admin.AnnouncementActiveView.as_view(), name='admin-announcement-active'),
     
-    # ==================== EXISTING ADMIN API ENDPOINTS (keeping your existing ones) ====================
+    # ==================== EXISTING ADMIN API ENDPOINTS ====================
     path('admin/dashboard/stats/', views_admin.DashboardStatsView.as_view(), name='admin_dashboard_stats'),
     path('admin/students/', views_admin.StudentListView.as_view(), name='admin_students'),
     path('admin/students/<uuid:pk>/', views_admin.StudentDetailView.as_view(), name='admin_student_detail'),
@@ -150,4 +151,4 @@ urlpatterns = [
     path('admin/error-logs/', views_admin.ErrorLogsView.as_view(), name='admin_error_logs'),
     path('activity-logs/', OwnerActivityLogView.as_view(), name='owner-activity-logs'),
     path('users/<uuid:user_id>/verify/', views_admin.VerifyUserView.as_view(), name='admin-verify-user'),
-]   
+]
