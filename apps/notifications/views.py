@@ -59,13 +59,22 @@ class MarkNotificationReadView(APIView):
             notification = Notification.objects.get(id=pk, user=request.user)
             notification.is_read = True
             notification.save()
-            return Response({'status': 'ok'})
+            return Response({'status': 'ok'}, status=status.HTTP_200_OK)
         except Notification.DoesNotExist:
-            return Response({'error': 'Not found'}, status=404)
+            return Response(
+                {'error': 'Notification not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error marking notification as read: {e}")
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class NotificationDeleteView(APIView):
-    """Delete a notification (used by auto-cleanup)"""
+    """Delete a notification"""
     permission_classes = [permissions.IsAuthenticated]
 
     def delete(self, request, pk):
