@@ -1,3 +1,4 @@
+import logging
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
@@ -10,6 +11,9 @@ from apps.hostels.models import Hostel
 from apps.chat.models import Conversation, Message
 from apps.subscriptions.models import SubscriptionPlan, OwnerSubscription
 from apps.notifications.models import Notification
+
+logger = logging.getLogger(__name__)
+
 
 # -------------------- Student Signup --------------------
 class StudentSignupSerializer(serializers.ModelSerializer):
@@ -171,7 +175,7 @@ class OwnerSignupSerializer(serializers.ModelSerializer):
         return user
 
 
-# -------------------- Student Login --------------------
+# -------------------- Student Login (5 attempts, 30 min lockout) --------------------
 class StudentLoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
@@ -188,39 +192,49 @@ class StudentLoginSerializer(serializers.Serializer):
             if user.locked_until and user.locked_until > timezone.now():
                 remaining = user.locked_until - timezone.now()
                 minutes = remaining.seconds // 60
-                raise serializers.ValidationError(
-                    f"Account locked due to too many failed attempts. Try again in {minutes} minute(s)."
-                )
+                seconds = remaining.seconds % 60
+                raise serializers.ValidationError({
+                    'locked': True,
+                    'message': f'Account locked due to too many failed attempts. Try again in {minutes} minute(s) and {seconds} second(s).',
+                    'remaining_seconds': remaining.seconds
+                })
+            # Auto-unlock if lockout time has passed
+            elif user.locked_until and user.locked_until <= timezone.now():
+                user.locked_until = None
+                user.failed_login_attempts = 0
+                user.save()
         except User.DoesNotExist:
             pass
 
         user = authenticate(email=email, password=password)
         
         if not user:
-            # Increment failed attempts
             try:
                 user = User.objects.get(email=email)
                 user.failed_login_attempts += 1
                 
-                if user.failed_login_attempts == 5:
+                # Student: Lock after 5 attempts for 30 minutes
+                if user.failed_login_attempts >= 5:
+                    user.locked_until = timezone.now() + timezone.timedelta(minutes=30)
                     user.save()
-                    raise serializers.ValidationError(
-                        'Too many failed attempts. Please reset your password using the "Forgot Password" link.'
-                    )
-                elif user.failed_login_attempts >= 6:
-                    user.locked_until = timezone.now() + timezone.timedelta(hours=1)
-                    user.save()
-                    raise serializers.ValidationError(
-                        'Account locked for 1 hour due to multiple failed login attempts.'
-                    )
+                    raise serializers.ValidationError({
+                        'locked': True,
+                        'message': 'Too many failed attempts. Account locked for 30 minutes.',
+                        'remaining_seconds': 30 * 60
+                    })
                 else:
+                    attempts_left = 5 - user.failed_login_attempts
                     user.save()
+                    raise serializers.ValidationError({
+                        'message': f'Invalid email or password. {attempts_left} attempt(s) remaining before lockout.',
+                        'attempts_left': attempts_left
+                    })
             except User.DoesNotExist:
                 pass
             
             raise serializers.ValidationError('Invalid email or password')
         
-        # SECURITY FIX: Check role for student login
+        # Check role
         if user.role != 'student':
             raise serializers.ValidationError('This account is not a student account.')
         
@@ -230,6 +244,7 @@ class StudentLoginSerializer(serializers.Serializer):
         if not user.email_verified:
             raise serializers.ValidationError('Please verify your email first')
         
+        # Reset failed attempts on successful login
         user.failed_login_attempts = 0
         user.locked_until = None
         user.save()
@@ -245,7 +260,10 @@ class StudentLoginSerializer(serializers.Serializer):
                     expires_at=expires_at
                 )
                 user.send_2fa_otp_email(otp_code)
-                raise serializers.ValidationError('OTP sent to your email. Please enter it to complete login.')
+                raise serializers.ValidationError({
+                    'requires_otp': True,
+                    'message': 'OTP sent to your email. Please enter it to complete login.'
+                })
             else:
                 try:
                     otp_obj = TwoFactorOTP.objects.filter(user=user, used=False).latest('created_at')
@@ -262,9 +280,7 @@ class StudentLoginSerializer(serializers.Serializer):
         return data
 
 
-
-# -------------------- Owner Login --------------------
-# -------------------- Owner Login (with role validation) --------------------
+# -------------------- Owner Login (5 attempts, 30 min lockout) --------------------
 class OwnerLoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
@@ -280,9 +296,16 @@ class OwnerLoginSerializer(serializers.Serializer):
             if user.locked_until and user.locked_until > timezone.now():
                 remaining = user.locked_until - timezone.now()
                 minutes = remaining.seconds // 60
-                raise serializers.ValidationError(
-                    f"Account locked due to too many failed attempts. Try again in {minutes} minute(s)."
-                )
+                seconds = remaining.seconds % 60
+                raise serializers.ValidationError({
+                    'locked': True,
+                    'message': f'Account locked due to too many failed attempts. Try again in {minutes} minute(s) and {seconds} second(s).',
+                    'remaining_seconds': remaining.seconds
+                })
+            elif user.locked_until and user.locked_until <= timezone.now():
+                user.locked_until = None
+                user.failed_login_attempts = 0
+                user.save()
         except User.DoesNotExist:
             pass
 
@@ -293,25 +316,28 @@ class OwnerLoginSerializer(serializers.Serializer):
                 user = User.objects.get(email=email)
                 user.failed_login_attempts += 1
                 
-                if user.failed_login_attempts == 5:
+                # Owner: Lock after 5 attempts for 30 minutes
+                if user.failed_login_attempts >= 5:
+                    user.locked_until = timezone.now() + timezone.timedelta(minutes=30)
                     user.save()
-                    raise serializers.ValidationError(
-                        'Too many failed attempts. Please reset your password using the "Forgot Password" link.'
-                    )
-                elif user.failed_login_attempts >= 6:
-                    user.locked_until = timezone.now() + timezone.timedelta(hours=1)
-                    user.save()
-                    raise serializers.ValidationError(
-                        'Account locked for 1 hour due to multiple failed login attempts.'
-                    )
+                    raise serializers.ValidationError({
+                        'locked': True,
+                        'message': 'Too many failed attempts. Account locked for 30 minutes.',
+                        'remaining_seconds': 30 * 60
+                    })
                 else:
+                    attempts_left = 5 - user.failed_login_attempts
                     user.save()
+                    raise serializers.ValidationError({
+                        'message': f'Invalid email or password. {attempts_left} attempt(s) remaining before lockout.',
+                        'attempts_left': attempts_left
+                    })
             except User.DoesNotExist:
                 pass
             
             raise serializers.ValidationError('Invalid email or password')
         
-        # SECURITY FIX: Check role for owner login
+        # Check role
         if user.role != 'owner':
             raise serializers.ValidationError('This account is not an owner account.')
         
@@ -321,6 +347,11 @@ class OwnerLoginSerializer(serializers.Serializer):
         if not user.email_verified:
             raise serializers.ValidationError('Please verify your email first')
         
+        # Check if owner is approved
+        if hasattr(user, 'owner_profile') and not user.owner_profile.is_approved:
+            raise serializers.ValidationError('Your account is pending admin approval.')
+        
+        # Reset failed attempts on successful login
         user.failed_login_attempts = 0
         user.locked_until = None
         user.save()
@@ -336,7 +367,10 @@ class OwnerLoginSerializer(serializers.Serializer):
                     expires_at=expires_at
                 )
                 user.send_2fa_otp_email(otp_code)
-                raise serializers.ValidationError('OTP sent to your email. Please enter it to complete login.')
+                raise serializers.ValidationError({
+                    'requires_otp': True,
+                    'message': 'OTP sent to your email. Please enter it to complete login.'
+                })
             else:
                 try:
                     otp_obj = TwoFactorOTP.objects.filter(user=user, used=False).latest('created_at')
@@ -353,7 +387,7 @@ class OwnerLoginSerializer(serializers.Serializer):
         return data
 
 
-# -------------------- Admin Login (with role validation) --------------------
+# -------------------- Admin Login (3 attempts, 1 hour lockout) --------------------
 class AdminLoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
@@ -369,9 +403,16 @@ class AdminLoginSerializer(serializers.Serializer):
             if user.locked_until and user.locked_until > timezone.now():
                 remaining = user.locked_until - timezone.now()
                 minutes = remaining.seconds // 60
-                raise serializers.ValidationError(
-                    f"Account locked due to too many failed attempts. Try again in {minutes} minute(s)."
-                )
+                seconds = remaining.seconds % 60
+                raise serializers.ValidationError({
+                    'locked': True,
+                    'message': f'Account locked due to too many failed attempts. Try again in {minutes} minute(s) and {seconds} second(s).',
+                    'remaining_seconds': remaining.seconds
+                })
+            elif user.locked_until and user.locked_until <= timezone.now():
+                user.locked_until = None
+                user.failed_login_attempts = 0
+                user.save()
         except User.DoesNotExist:
             pass
 
@@ -382,20 +423,28 @@ class AdminLoginSerializer(serializers.Serializer):
                 user = User.objects.get(email=email)
                 user.failed_login_attempts += 1
                 
+                # Admin: Lock after 3 attempts for 1 hour
                 if user.failed_login_attempts >= 3:
                     user.locked_until = timezone.now() + timezone.timedelta(hours=1)
                     user.save()
-                    raise serializers.ValidationError(
-                        'Account locked for 1 hour due to multiple failed login attempts.'
-                    )
+                    raise serializers.ValidationError({
+                        'locked': True,
+                        'message': 'Too many failed attempts. Account locked for 1 hour.',
+                        'remaining_seconds': 60 * 60
+                    })
                 else:
+                    attempts_left = 3 - user.failed_login_attempts
                     user.save()
+                    raise serializers.ValidationError({
+                        'message': f'Invalid email or password. {attempts_left} attempt(s) remaining before lockout.',
+                        'attempts_left': attempts_left
+                    })
             except User.DoesNotExist:
                 pass
             
             raise serializers.ValidationError('Invalid email or password')
         
-        # SECURITY FIX: Check role for admin login
+        # Check role
         if user.role != 'admin' and not user.is_superuser:
             raise serializers.ValidationError('This account is not an admin account.')
         
@@ -405,6 +454,7 @@ class AdminLoginSerializer(serializers.Serializer):
         if not user.email_verified:
             raise serializers.ValidationError('Please verify your email first')
         
+        # Reset failed attempts on successful login
         user.failed_login_attempts = 0
         user.locked_until = None
         user.save()
@@ -420,7 +470,10 @@ class AdminLoginSerializer(serializers.Serializer):
                     expires_at=expires_at
                 )
                 user.send_2fa_otp_email(otp_code)
-                raise serializers.ValidationError('OTP sent to your email. Please enter it to complete login.')
+                raise serializers.ValidationError({
+                    'requires_otp': True,
+                    'message': 'OTP sent to your email. Please enter it to complete login.'
+                })
             else:
                 try:
                     otp_obj = TwoFactorOTP.objects.filter(user=user, used=False).latest('created_at')
@@ -437,12 +490,52 @@ class AdminLoginSerializer(serializers.Serializer):
         return data
 
 
+# -------------------- Email Verification --------------------
+class VerifyEmailSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    token = serializers.CharField()
+    
+    def validate(self, data):
+        try:
+            user = User.objects.get(email=data['email'])
+        except User.DoesNotExist:
+            raise serializers.ValidationError('User not found')
+        
+        if user.email_verified:
+            raise serializers.ValidationError('Email already verified')
+        
+        if user.email_verification_token != data['token']:
+            raise serializers.ValidationError('Invalid verification token')
+        
+        if user.email_verification_sent_at:
+            expiry = user.email_verification_sent_at + timezone.timedelta(hours=24)
+            if timezone.now() > expiry:
+                raise serializers.ValidationError('Verification link expired')
+        
+        data['user'] = user
+        return data
+
+
+class ResendVerificationSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    
+    def validate_email(self, value):
+        try:
+            user = User.objects.get(email=value)
+            if user.email_verified:
+                raise serializers.ValidationError('Email already verified')
+        except User.DoesNotExist:
+            pass
+        return value
+
+
 # -------------------- Password Reset --------------------
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
     def validate_email(self, value):
         return value
+
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -476,6 +569,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 class TwoFactorOTPRequestSerializer(serializers.Serializer):
     pass
 
+
 class TwoFactorOTPVerifySerializer(serializers.Serializer):
     otp = serializers.CharField(max_length=6, min_length=6)
 
@@ -507,6 +601,7 @@ class TwoFactorOTPVerifySerializer(serializers.Serializer):
 # -------------------- 2FA Enable/Disable --------------------
 class TwoFactorEnableSerializer(serializers.Serializer):
     pass
+
 
 class TwoFactorDisableSerializer(serializers.Serializer):
     otp = serializers.CharField(max_length=6, min_length=6)
@@ -580,7 +675,6 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 # ==================== ADMIN SERIALIZERS ====================
-
 class AdminStudentSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     student_profile = serializers.SerializerMethodField()
@@ -759,19 +853,6 @@ class AdminOwnerSubscriptionSerializer(serializers.ModelSerializer):
         return getattr(obj, 'is_active', False)
 
 
-# ==================== ADMIN CHAT SERIALIZERS ====================
-class AdminMessageSerializer(serializers.ModelSerializer):
-    sender_name = serializers.SerializerMethodField()
-    timestamp = serializers.DateTimeField(format="%Y-%m-%d %H:%M:%S")
-
-    class Meta:
-        model = Message
-        fields = ['id', 'sender_name', 'content', 'timestamp', 'is_read']
-
-    def get_sender_name(self, obj):
-        return obj.sender.full_name if obj.sender else 'System'
-
-
 class AdminConversationSerializer(serializers.ModelSerializer):
     owner_name = serializers.SerializerMethodField()
     owner_email = serializers.EmailField(source='owner.email')
@@ -799,7 +880,18 @@ class AdminConversationSerializer(serializers.ModelSerializer):
         return 0
 
 
-# ==================== ADMIN NOTIFICATION SERIALIZER ====================
+class AdminMessageSerializer(serializers.ModelSerializer):
+    sender_name = serializers.SerializerMethodField()
+    timestamp = serializers.DateTimeField(format="%Y-%m-%d %H:%M:%S")
+
+    class Meta:
+        model = Message
+        fields = ['id', 'sender_name', 'content', 'timestamp', 'is_read']
+
+    def get_sender_name(self, obj):
+        return obj.sender.full_name if obj.sender else 'System'
+
+
 class AdminNotificationSerializer(serializers.ModelSerializer):
     user_email = serializers.SerializerMethodField()
     created_at = serializers.DateTimeField(format="%Y-%m-%d %H:%M:%S")
@@ -812,45 +904,6 @@ class AdminNotificationSerializer(serializers.ModelSerializer):
         return obj.user.email if obj.user else None
 
 
-# -------------------- Email Verification --------------------
-class VerifyEmailSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    token = serializers.CharField()
-    
-    def validate(self, data):
-        try:
-            user = User.objects.get(email=data['email'])
-        except User.DoesNotExist:
-            raise serializers.ValidationError('User not found')
-        
-        if user.email_verified:
-            raise serializers.ValidationError('Email already verified')
-        
-        if user.email_verification_token != data['token']:
-            raise serializers.ValidationError('Invalid verification token')
-        
-        if user.email_verification_sent_at:
-            expiry = user.email_verification_sent_at + timezone.timedelta(hours=24)
-            if timezone.now() > expiry:
-                raise serializers.ValidationError('Verification link expired')
-        
-        data['user'] = user
-        return data
-    
-# -------------------- Resend Verification --------------------
-class ResendVerificationSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    
-    def validate_email(self, value):
-        try:
-            user = User.objects.get(email=value)
-            if user.email_verified:
-                raise serializers.ValidationError('Email already verified')
-        except User.DoesNotExist:
-            pass
-        return value
-
-# ==================== EXTRA SERIALIZERS ====================
 class SimpleUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User

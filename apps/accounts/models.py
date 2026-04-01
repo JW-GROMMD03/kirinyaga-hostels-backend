@@ -97,6 +97,12 @@ class User(AbstractBaseUser, PermissionsMixin):
         self.save()
         return self.email_verification_token
     
+    def reset_lockout(self):
+    """Reset lockout status"""
+    self.failed_login_attempts = 0
+    self.locked_until = None
+    self.save()
+    
     def send_verification_email(self):
         """Send email verification link - NO TEMPLATES"""
         try:
