@@ -249,7 +249,7 @@ class StudentLoginSerializer(serializers.Serializer):
         user.locked_until = None
         user.save()
         
-        # FIXED: Return structured response for OTP requirement
+        # FIXED: Return structured response for OTP requirement using non_field_errors
         if user.is_2fa_enabled:
             if not otp_token:
                 otp_code = f"{random.randint(100000, 999999)}"
@@ -261,9 +261,13 @@ class StudentLoginSerializer(serializers.Serializer):
                     expires_at=expires_at
                 )
                 user.send_2fa_otp_email(otp_code)
-                raise serializers.ValidationError({
-                    'requires_otp': True,
-                    'message': 'Verification code sent to your email. Please enter it to complete login.'
+                # CRITICAL FIX: Use non_field_errors wrapper for frontend detection
+                from rest_framework.exceptions import ValidationError as DRFValidationError
+                raise DRFValidationError({
+                    'non_field_errors': [{
+                        'requires_otp': True,
+                        'message': 'Verification code sent to your email. Please enter it to complete login.'
+                    }]
                 })
             else:
                 try:
@@ -363,7 +367,7 @@ class OwnerLoginSerializer(serializers.Serializer):
         user.locked_until = None
         user.save()
         
-        # FIXED: Return structured response for OTP requirement
+        # FIXED: Return structured response for OTP requirement using non_field_errors
         if user.is_2fa_enabled:
             if not otp_token:
                 otp_code = f"{random.randint(100000, 999999)}"
@@ -375,9 +379,13 @@ class OwnerLoginSerializer(serializers.Serializer):
                     expires_at=expires_at
                 )
                 user.send_2fa_otp_email(otp_code)
-                raise serializers.ValidationError({
-                    'requires_otp': True,
-                    'message': 'Verification code sent to your email. Please enter it to complete login.'
+                # CRITICAL FIX: Use non_field_errors wrapper for frontend detection
+                from rest_framework.exceptions import ValidationError as DRFValidationError
+                raise DRFValidationError({
+                    'non_field_errors': [{
+                        'requires_otp': True,
+                        'message': 'Verification code sent to your email. Please enter it to complete login.'
+                    }]
                 })
             else:
                 try:
@@ -473,7 +481,7 @@ class AdminLoginSerializer(serializers.Serializer):
         user.locked_until = None
         user.save()
         
-        # FIXED: Return structured response for OTP requirement
+        # FIXED: Return structured response for OTP requirement using non_field_errors
         if user.is_2fa_enabled:
             if not otp_token:
                 otp_code = f"{random.randint(100000, 999999)}"
@@ -485,9 +493,13 @@ class AdminLoginSerializer(serializers.Serializer):
                     expires_at=expires_at
                 )
                 user.send_2fa_otp_email(otp_code)
-                raise serializers.ValidationError({
-                    'requires_otp': True,
-                    'message': 'Verification code sent to your email. Please enter it to complete login.'
+                # CRITICAL FIX: Use non_field_errors wrapper for frontend detection
+                from rest_framework.exceptions import ValidationError as DRFValidationError
+                raise DRFValidationError({
+                    'non_field_errors': [{
+                        'requires_otp': True,
+                        'message': 'Verification code sent to your email. Please enter it to complete login.'
+                    }]
                 })
             else:
                 try:
