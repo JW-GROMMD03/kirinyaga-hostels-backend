@@ -7,7 +7,6 @@ from datetime import timedelta
 from .models import Booking
 from .serializers import BookingSerializer, BookingCreateSerializer
 from apps.accounts.models import User
-from apps.accounts.views_admin import IsAdminUser
 
 # Helper permission for admin
 class IsAdminUser(permissions.BasePermission):
@@ -62,6 +61,9 @@ class StudentBookingListView(generics.ListAPIView):
         user = self.request.user
         if user.role == 'student':
             return Booking.objects.filter(student=user).order_by('-created_at')
+        elif user.role == 'owner':
+            # Owners can see bookings for their hostels
+            return Booking.objects.filter(hostel__owner=user).order_by('-created_at')
         elif user.role == 'admin' or user.is_superuser:
             return Booking.objects.all().order_by('-created_at')
         return Booking.objects.none()
@@ -75,7 +77,7 @@ class BookingCreateView(generics.CreateAPIView):
     def perform_create(self, serializer):
         if self.request.user.role != 'student':
             raise permissions.PermissionDenied("Only students can create bookings")
-        serializer.save(expires_at=timezone.now() + timedelta(hours=1))
+        serializer.save(student=self.request.user, expires_at=timezone.now() + timedelta(hours=1))
 
 
 class BookingDetailView(generics.RetrieveUpdateAPIView):

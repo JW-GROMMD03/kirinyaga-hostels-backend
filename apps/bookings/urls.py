@@ -2,19 +2,22 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # ==================== ADMIN ENDPOINTS ====================
-    path('', views.AdminBookingListView.as_view(), name='admin-bookings'),
+    # ==================== STUDENT ENDPOINTS (Primary) ====================
+    # Student can access their own bookings via this endpoint
+    path('', views.StudentBookingListView.as_view(), name='student-bookings'),
     
-    # Student endpoints
-    path('student/', views.StudentBookingListView.as_view(), name='student-bookings'),
+    # Create booking
     path('create/', views.BookingCreateView.as_view(), name='create-booking'),
+    
+    # Booking detail and actions
     path('<int:pk>/', views.BookingDetailView.as_view(), name='booking-detail'),
     path('<int:pk>/cancel/', views.CancelBookingView.as_view(), name='cancel-booking'),
     
-    # Admin endpoints
+    # ==================== ADMIN ENDPOINTS ====================
+    path('admin/', views.AdminBookingListView.as_view(), name='admin-bookings'),
     path('hostel/<int:hostel_id>/', views.HostelBookingsView.as_view(), name='hostel-bookings'),
     
-    # Owner dashboard endpoints
+    # ==================== OWNER DASHBOARD ENDPOINTS ====================
     path('owner-summary/', views.OwnerBookingsSummaryView.as_view(), name='owner-bookings-summary'),
     path('owner/', views.OwnerBookingListView.as_view(), name='owner-bookings'),
     path('owner/<int:pk>/', views.OwnerBookingDetailView.as_view(), name='owner-booking-detail'),
