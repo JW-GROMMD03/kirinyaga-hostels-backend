@@ -249,6 +249,7 @@ class StudentLoginSerializer(serializers.Serializer):
         user.locked_until = None
         user.save()
         
+        # FIXED: Return structured response for OTP requirement
         if user.is_2fa_enabled:
             if not otp_token:
                 otp_code = f"{random.randint(100000, 999999)}"
@@ -262,19 +263,25 @@ class StudentLoginSerializer(serializers.Serializer):
                 user.send_2fa_otp_email(otp_code)
                 raise serializers.ValidationError({
                     'requires_otp': True,
-                    'message': 'OTP sent to your email. Please enter it to complete login.'
+                    'message': 'Verification code sent to your email. Please enter it to complete login.'
                 })
             else:
                 try:
                     otp_obj = TwoFactorOTP.objects.filter(user=user, used=False).latest('created_at')
                     if not otp_obj.is_valid():
-                        raise serializers.ValidationError('OTP has expired. Please request a new one.')
+                        raise serializers.ValidationError({
+                            'message': 'OTP has expired. Please request a new one.'
+                        })
                     if otp_obj.otp != otp_token:
-                        raise serializers.ValidationError('Invalid OTP code.')
+                        raise serializers.ValidationError({
+                            'message': 'Invalid OTP code.'
+                        })
                     otp_obj.used = True
                     otp_obj.save()
                 except TwoFactorOTP.DoesNotExist:
-                    raise serializers.ValidationError('No valid OTP found. Please request a new one.')
+                    raise serializers.ValidationError({
+                        'message': 'No valid OTP found. Please request a new one.'
+                    })
 
         data['user'] = user
         return data
@@ -356,6 +363,7 @@ class OwnerLoginSerializer(serializers.Serializer):
         user.locked_until = None
         user.save()
         
+        # FIXED: Return structured response for OTP requirement
         if user.is_2fa_enabled:
             if not otp_token:
                 otp_code = f"{random.randint(100000, 999999)}"
@@ -369,19 +377,25 @@ class OwnerLoginSerializer(serializers.Serializer):
                 user.send_2fa_otp_email(otp_code)
                 raise serializers.ValidationError({
                     'requires_otp': True,
-                    'message': 'OTP sent to your email. Please enter it to complete login.'
+                    'message': 'Verification code sent to your email. Please enter it to complete login.'
                 })
             else:
                 try:
                     otp_obj = TwoFactorOTP.objects.filter(user=user, used=False).latest('created_at')
                     if not otp_obj.is_valid():
-                        raise serializers.ValidationError('OTP has expired. Please request a new one.')
+                        raise serializers.ValidationError({
+                            'message': 'OTP has expired. Please request a new one.'
+                        })
                     if otp_obj.otp != otp_token:
-                        raise serializers.ValidationError('Invalid OTP code.')
+                        raise serializers.ValidationError({
+                            'message': 'Invalid OTP code.'
+                        })
                     otp_obj.used = True
                     otp_obj.save()
                 except TwoFactorOTP.DoesNotExist:
-                    raise serializers.ValidationError('No valid OTP found. Please request a new one.')
+                    raise serializers.ValidationError({
+                        'message': 'No valid OTP found. Please request a new one.'
+                    })
 
         data['user'] = user
         return data
@@ -459,6 +473,7 @@ class AdminLoginSerializer(serializers.Serializer):
         user.locked_until = None
         user.save()
         
+        # FIXED: Return structured response for OTP requirement
         if user.is_2fa_enabled:
             if not otp_token:
                 otp_code = f"{random.randint(100000, 999999)}"
@@ -472,19 +487,25 @@ class AdminLoginSerializer(serializers.Serializer):
                 user.send_2fa_otp_email(otp_code)
                 raise serializers.ValidationError({
                     'requires_otp': True,
-                    'message': 'OTP sent to your email. Please enter it to complete login.'
+                    'message': 'Verification code sent to your email. Please enter it to complete login.'
                 })
             else:
                 try:
                     otp_obj = TwoFactorOTP.objects.filter(user=user, used=False).latest('created_at')
                     if not otp_obj.is_valid():
-                        raise serializers.ValidationError('OTP has expired. Please request a new one.')
+                        raise serializers.ValidationError({
+                            'message': 'OTP has expired. Please request a new one.'
+                        })
                     if otp_obj.otp != otp_token:
-                        raise serializers.ValidationError('Invalid OTP code.')
+                        raise serializers.ValidationError({
+                            'message': 'Invalid OTP code.'
+                        })
                     otp_obj.used = True
                     otp_obj.save()
                 except TwoFactorOTP.DoesNotExist:
-                    raise serializers.ValidationError('No valid OTP found. Please request a new one.')
+                    raise serializers.ValidationError({
+                        'message': 'No valid OTP found. Please request a new one.'
+                    })
 
         data['user'] = user
         return data
