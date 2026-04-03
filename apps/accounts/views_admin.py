@@ -331,24 +331,49 @@ class ToggleUserStatusView(APIView):
         try:
             user = User.objects.get(id=user_id)
             user.is_active = not user.is_active
+            
+            # Determine the action message
             if not user.is_active:
-                user.locked_until = timezone.now() + timedelta(hours=24)
+                action_message = f'User {user.email} has been BLOCKED by admin.'
+                block_reason = request.data.get('reason', 'Suspicious activities detected')
+                user.locked_until = timezone.now() + timedelta(days=365)  # Long lock for blocked users
             else:
+                action_message = f'User {user.email} has been UNBLOCKED by admin.'
                 user.locked_until = None
+                user.failed_login_attempts = 0
+            
             user.save()
+            
+            # Send notification to the user
+            if hasattr(Notification, 'objects'):
+                Notification.objects.create(
+                    user=user,
+                    type='account_status',
+                    title='Account Status Update',
+                    message=action_message,
+                    link='/login.html'
+                )
             
             AuditLog.objects.create(
                 user=request.user,
                 action='TOGGLE_USER_STATUS',
                 ip_address=get_client_ip(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                details={'user_id': str(user_id), 'email': user.email, 'new_status': user.is_active}
+                details={
+                    'user_id': str(user_id), 
+                    'email': user.email, 
+                    'new_status': user.is_active,
+                    'blocked': not user.is_active
+                }
             )
             
-            return Response({'status': 'success', 'is_active': user.is_active})
+            return Response({
+                'status': 'success', 
+                'is_active': user.is_active,
+                'message': f'User has been {"blocked" if not user.is_active else "unblocked"} successfully'
+            })
         except User.DoesNotExist:
             return Response({'error': 'User not found'}, status=404)
-
 class DeleteUserView(APIView):
     """Delete a user account"""
     permission_classes = [IsAdminUser]

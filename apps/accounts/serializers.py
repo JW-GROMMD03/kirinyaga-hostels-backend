@@ -15,7 +15,7 @@ from apps.notifications.models import Notification
 logger = logging.getLogger(__name__)
 
 
-# -------------------- Student Signup --------------------
+# -------------------- Student Signup (No approval needed) --------------------
 class StudentSignupSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True)
@@ -66,6 +66,10 @@ class StudentSignupSerializer(serializers.ModelSerializer):
             phone_number=phone_number
         )
         
+        # Students are automatically active, just need email verification
+        user.is_active = True
+        user.save()
+        
         user.send_verification_email()
         
         AdminNotification.objects.create(
@@ -78,7 +82,7 @@ class StudentSignupSerializer(serializers.ModelSerializer):
         return user
 
 
-# -------------------- Owner Signup --------------------
+# -------------------- Owner Signup (Needs admin approval) --------------------
 class OwnerSignupSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True)
@@ -163,6 +167,10 @@ class OwnerSignupSerializer(serializers.ModelSerializer):
             profile.longitude = lng
             profile.save()
 
+        # Owners start as inactive until admin approval
+        user.is_active = False
+        user.save()
+        
         user.send_verification_email()
 
         AdminNotification.objects.create(
@@ -175,7 +183,7 @@ class OwnerSignupSerializer(serializers.ModelSerializer):
         return user
 
 
-# -------------------- Student Login (5 attempts, 30 min lockout) --------------------
+# -------------------- Student Login (with proper blocked account message) --------------------
 class StudentLoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
@@ -189,6 +197,14 @@ class StudentLoginSerializer(serializers.Serializer):
         # Check if account is locked
         try:
             user = User.objects.get(email=email)
+            
+            # Check if user is blocked (is_active = False)
+            if not user.is_active:
+                raise serializers.ValidationError({
+                    'blocked': True,
+                    'message': 'This account has been blocked by the admin due to suspicious activities. Please contact our help desk at support@kirinyaga-hostels.ac.ke or call +254 703 250 550.'
+                })
+            
             if user.locked_until and user.locked_until > timezone.now():
                 remaining = user.locked_until - timezone.now()
                 minutes = remaining.seconds // 60
@@ -238,11 +254,271 @@ class StudentLoginSerializer(serializers.Serializer):
         if user.role != 'student':
             raise serializers.ValidationError('This account is not a student account.')
         
+        # Check if user is blocked (double-check)
         if not user.is_active:
-            raise serializers.ValidationError('Account is disabled')
+            raise serializers.ValidationError({
+                'blocked': True,
+                'message': 'This account has been blocked by the admin due to suspicious activities. Please contact our help desk at support@kirinyaga-hostels.ac.ke or call +254 703 250 550.'
+            })
         
         if not user.email_verified:
-            raise serializers.ValidationError('Please verify your email first')
+            raise serializers.ValidationError('Please verify your email first. Check your inbox for the verification link.')
+        
+        # Reset failed attempts on successful login
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.save()
+        
+        # FIXED: Return structured response for OTP requirement using non_field_errors
+        if user.is_2fa_enabled:
+            if not otp_token:
+                otp_code = f"{random.randint(100000, 999999)}"
+                expires_at = timezone.now() + timezone.timedelta(minutes=10)
+                TwoFactorOTP.objects.filter(user=user, used=False).update(used=True)
+                TwoFactorOTP.objects.create(
+                    user=user,
+                    otp=otp_code,
+                    expires_at=expires_at
+                )
+                user.send_2fa_otp_email(otp_code)
+                # CRITICAL FIX: Use non_field_errors wrapper for frontend detection
+                from rest_framework.exceptions import ValidationError as DRFValidationError
+                raise DRFValidationError({
+                    'non_field_errors': [{
+                        'requires_otp': True,
+                        'message': 'Verification code sent to your email. Please enter it to complete login.'
+                    }]
+                })
+            else:
+                try:
+                    otp_obj = TwoFactorOTP.objects.filter(user=user, used=False).latest('created_at')
+                    if not otp_obj.is_valid():
+                        raise serializers.ValidationError({
+                            'message': 'OTP has expired. Please request a new one.'
+                        })
+                    if otp_obj.otp != otp_token:
+                        raise serializers.ValidationError({
+                            'message': 'Invalid OTP code.'
+                        })
+                    otp_obj.used = True
+                    otp_obj.save()
+                except TwoFactorOTP.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'message': 'No valid OTP found. Please request a new one.'
+                    })
+
+        data['user'] = user
+        return data
+
+
+# -------------------- Owner Login (with approval and block check) --------------------
+class OwnerLoginSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+    otp_token = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, data):
+        email = data.get('email')
+        password = data.get('password')
+        otp_token = data.get('otp_token', '')
+
+        try:
+            user = User.objects.get(email=email)
+            
+            # Check if user is blocked (is_active = False)
+            if not user.is_active:
+                raise serializers.ValidationError({
+                    'blocked': True,
+                    'message': 'This account has been blocked by the admin due to suspicious activities. Please contact our help desk at support@kirinyaga-hostels.ac.ke or call +254 703 250 550.'
+                })
+            
+            if user.locked_until and user.locked_until > timezone.now():
+                remaining = user.locked_until - timezone.now()
+                minutes = remaining.seconds // 60
+                seconds = remaining.seconds % 60
+                raise serializers.ValidationError({
+                    'locked': True,
+                    'message': f'Account locked due to too many failed attempts. Try again in {minutes} minute(s) and {seconds} second(s).',
+                    'remaining_seconds': remaining.seconds
+                })
+            elif user.locked_until and user.locked_until <= timezone.now():
+                user.locked_until = None
+                user.failed_login_attempts = 0
+                user.save()
+        except User.DoesNotExist:
+            pass
+
+        user = authenticate(email=email, password=password)
+        
+        if not user:
+            try:
+                user = User.objects.get(email=email)
+                user.failed_login_attempts += 1
+                
+                # Owner: Lock after 5 attempts for 30 minutes
+                if user.failed_login_attempts >= 5:
+                    user.locked_until = timezone.now() + timezone.timedelta(minutes=30)
+                    user.save()
+                    raise serializers.ValidationError({
+                        'locked': True,
+                        'message': 'Too many failed attempts. Account locked for 30 minutes.',
+                        'remaining_seconds': 30 * 60
+                    })
+                else:
+                    attempts_left = 5 - user.failed_login_attempts
+                    user.save()
+                    raise serializers.ValidationError({
+                        'message': f'Invalid email or password. {attempts_left} attempt(s) remaining before lockout.',
+                        'attempts_left': attempts_left
+                    })
+            except User.DoesNotExist:
+                pass
+            
+            raise serializers.ValidationError('Invalid email or password')
+        
+        # Check role
+        if user.role != 'owner':
+            raise serializers.ValidationError('This account is not an owner account.')
+        
+        # Check if user is blocked (double-check)
+        if not user.is_active:
+            raise serializers.ValidationError({
+                'blocked': True,
+                'message': 'This account has been blocked by the admin due to suspicious activities. Please contact our help desk at support@kirinyaga-hostels.ac.ke or call +254 703 250 550.'
+            })
+        
+        if not user.email_verified:
+            raise serializers.ValidationError('Please verify your email first. Check your inbox for the verification link.')
+        
+        # Check if owner is approved
+        if hasattr(user, 'owner_profile') and not user.owner_profile.is_approved:
+            raise serializers.ValidationError('Your account is pending admin approval. You will receive an email once approved.')
+        
+        # Reset failed attempts on successful login
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.save()
+        
+        # FIXED: Return structured response for OTP requirement using non_field_errors
+        if user.is_2fa_enabled:
+            if not otp_token:
+                otp_code = f"{random.randint(100000, 999999)}"
+                expires_at = timezone.now() + timezone.timedelta(minutes=10)
+                TwoFactorOTP.objects.filter(user=user, used=False).update(used=True)
+                TwoFactorOTP.objects.create(
+                    user=user,
+                    otp=otp_code,
+                    expires_at=expires_at
+                )
+                user.send_2fa_otp_email(otp_code)
+                # CRITICAL FIX: Use non_field_errors wrapper for frontend detection
+                from rest_framework.exceptions import ValidationError as DRFValidationError
+                raise DRFValidationError({
+                    'non_field_errors': [{
+                        'requires_otp': True,
+                        'message': 'Verification code sent to your email. Please enter it to complete login.'
+                    }]
+                })
+            else:
+                try:
+                    otp_obj = TwoFactorOTP.objects.filter(user=user, used=False).latest('created_at')
+                    if not otp_obj.is_valid():
+                        raise serializers.ValidationError({
+                            'message': 'OTP has expired. Please request a new one.'
+                        })
+                    if otp_obj.otp != otp_token:
+                        raise serializers.ValidationError({
+                            'message': 'Invalid OTP code.'
+                        })
+                    otp_obj.used = True
+                    otp_obj.save()
+                except TwoFactorOTP.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'message': 'No valid OTP found. Please request a new one.'
+                    })
+
+        data['user'] = user
+        return data
+
+
+# -------------------- Admin Login (with block check) --------------------
+class AdminLoginSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+    otp_token = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, data):
+        email = data.get('email')
+        password = data.get('password')
+        otp_token = data.get('otp_token', '')
+
+        try:
+            user = User.objects.get(email=email)
+            
+            # Check if admin is blocked
+            if not user.is_active:
+                raise serializers.ValidationError({
+                    'blocked': True,
+                    'message': 'Your admin account has been disabled. Please contact the system administrator.'
+                })
+            
+            if user.locked_until and user.locked_until > timezone.now():
+                remaining = user.locked_until - timezone.now()
+                minutes = remaining.seconds // 60
+                seconds = remaining.seconds % 60
+                raise serializers.ValidationError({
+                    'locked': True,
+                    'message': f'Account locked due to too many failed attempts. Try again in {minutes} minute(s) and {seconds} second(s).',
+                    'remaining_seconds': remaining.seconds
+                })
+            elif user.locked_until and user.locked_until <= timezone.now():
+                user.locked_until = None
+                user.failed_login_attempts = 0
+                user.save()
+        except User.DoesNotExist:
+            pass
+
+        user = authenticate(email=email, password=password)
+        
+        if not user:
+            try:
+                user = User.objects.get(email=email)
+                user.failed_login_attempts += 1
+                
+                # Admin: Lock after 3 attempts for 1 hour
+                if user.failed_login_attempts >= 3:
+                    user.locked_until = timezone.now() + timezone.timedelta(hours=1)
+                    user.save()
+                    raise serializers.ValidationError({
+                        'locked': True,
+                        'message': 'Too many failed attempts. Account locked for 1 hour.',
+                        'remaining_seconds': 60 * 60
+                    })
+                else:
+                    attempts_left = 3 - user.failed_login_attempts
+                    user.save()
+                    raise serializers.ValidationError({
+                        'message': f'Invalid email or password. {attempts_left} attempt(s) remaining before lockout.',
+                        'attempts_left': attempts_left
+                    })
+            except User.DoesNotExist:
+                pass
+            
+            raise serializers.ValidationError('Invalid email or password')
+        
+        # Check role
+        if user.role != 'admin' and not user.is_superuser:
+            raise serializers.ValidationError('This account is not an admin account.')
+        
+        # Check if admin is active
+        if not user.is_active:
+            raise serializers.ValidationError({
+                'blocked': True,
+                'message': 'Your admin account has been disabled. Please contact the system administrator.'
+            })
+        
+        if not user.email_verified:
+            raise serializers.ValidationError('Please verify your email first.')
         
         # Reset failed attempts on successful login
         user.failed_login_attempts = 0
