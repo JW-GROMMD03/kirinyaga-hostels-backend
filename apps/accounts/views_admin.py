@@ -2160,97 +2160,120 @@ class ImpersonateStartView(APIView):
         
         try:
             if email:
-                user = User.objects.get(email=email)
+                target_user = User.objects.get(email=email)
             elif user_id:
-                user = User.objects.get(id=user_id)
+                target_user = User.objects.get(id=user_id)
             else:
                 return Response({'error': 'Email or user ID required'}, status=400)
             
             # Don't allow impersonating other admins
-            if user.role == 'admin' or user.is_superuser:
+            if target_user.role == 'admin' or target_user.is_superuser:
                 return Response({'error': 'Cannot impersonate admin users'}, status=403)
             
             from rest_framework_simplejwt.tokens import RefreshToken
             
+            # Store original user info in session
+            request.session['impersonating_id'] = str(target_user.id)
+            request.session['original_user_id'] = str(request.user.id)
+            request.session['impersonating'] = True
+            
             # Create impersonation token
-            refresh = RefreshToken.for_user(user)
+            refresh = RefreshToken.for_user(target_user)
             refresh['impersonated_by'] = str(request.user.id)
             refresh['is_impersonating'] = True
+            refresh['original_role'] = request.user.role
             
-            # Log the action
+            # Log the impersonation
             AuditLog.objects.create(
                 user=request.user,
                 action='IMPERSONATE_USER',
+                action_category='admin',
                 ip_address=get_client_ip(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                details={'impersonated_user': user.email, 'user_id': str(user.id)}
+                details={
+                    'impersonated_user': target_user.email,
+                    'impersonated_user_id': str(target_user.id),
+                    'impersonated_user_role': target_user.role
+                }
             )
             
             return Response({
                 'access_token': str(refresh.access_token),
-                'user_email': user.email,
-                'user_name': user.full_name,
-                'user_role': user.role
+                'refresh_token': str(refresh),
+                'user_email': target_user.email,
+                'user_name': target_user.full_name,
+                'user_role': target_user.role,
+                'is_impersonating': True
             })
+            
         except User.DoesNotExist:
             return Response({'error': 'User not found'}, status=404)
         except Exception as e:
             logger.error(f"Error starting impersonation: {e}")
             return Response({'error': str(e)}, status=500)
 
+
 class ImpersonateStopView(APIView):
-    """Stop impersonating"""
+    """Stop impersonating and return to admin account"""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         # Check if currently impersonating
-        if request.session.get('impersonating'):
-            del request.session['impersonating']
+        original_user_id = request.session.get('original_user_id')
         
-        AuditLog.objects.create(
-            user=request.user,
-            action='STOP_IMPERSONATION',
-            ip_address=get_client_ip(request),
-            user_agent=request.META.get('HTTP_USER_AGENT', ''),
-            details={'status': 'stopped'}
-        )
-        
-        return Response({'status': 'success'})
-    
-class ImpersonateStartView(APIView):
-    permission_classes = [IsAdminUser]
-    
-    def post(self, request):
-        email = request.data.get('email')
-        user_id = request.data.get('user_id')
+        if not original_user_id:
+            return Response({'error': 'Not currently impersonating'}, status=400)
         
         try:
-            if email:
-                user = User.objects.get(email=email)
-            elif user_id:
-                user = User.objects.get(id=user_id)
-            else:
-                return Response({'error': 'Email or user ID required'}, status=400)
+            from rest_framework_simplejwt.tokens import RefreshToken
+            original_user = User.objects.get(id=original_user_id)
             
-            # Create impersonation token
-            refresh = RefreshToken.for_user(user)
-            refresh['impersonated_by'] = str(request.user.id)
-            refresh['is_impersonating'] = True
+            # Create new JWT for original admin
+            refresh = RefreshToken.for_user(original_user)
             
+            # Clear impersonation session
+            request.session.pop('impersonating_id', None)
+            request.session.pop('original_user_id', None)
+            request.session.pop('impersonating', None)
+            
+            # Log stop impersonation
             AuditLog.objects.create(
-                user=request.user,
-                action='IMPERSONATE_USER',
+                user=original_user,
+                action='STOP_IMPERSONATION',
+                action_category='admin',
                 ip_address=get_client_ip(request),
-                details={'impersonated_user': user.email}
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                details={'status': 'stopped'}
             )
             
             return Response({
                 'access_token': str(refresh.access_token),
-                'user_email': user.email,
-                'user_name': user.full_name
+                'refresh_token': str(refresh),
+                'user_email': original_user.email,
+                'user_name': original_user.full_name,
+                'user_role': original_user.role,
+                'is_impersonating': False
             })
+            
         except User.DoesNotExist:
-            return Response({'error': 'User not found'}, status=404)
+            return Response({'error': 'Original user not found'}, status=404)
+        except Exception as e:
+            logger.error(f"Error stopping impersonation: {e}")
+            return Response({'error': str(e)}, status=500)
+
+
+class CheckImpersonationView(APIView):
+    """Check if currently impersonating"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        is_impersonating = request.session.get('impersonating', False)
+        original_user_id = request.session.get('original_user_id')
+        
+        return Response({
+            'is_impersonating': is_impersonating,
+            'original_user_id': original_user_id
+        })
 
 class NewsletterSubscribeView(APIView):
     """Subscribe to newsletter"""
@@ -2289,32 +2312,3 @@ class NewsletterSubscribeView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
-class NewsletterSubscribeView(APIView):
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        email = request.data.get('email')
-        
-        if not email:
-            return Response({'error': 'Email is required'}, status=400)
-        
-        # Validate email format
-        import re
-        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
-            return Response({'error': 'Invalid email format'}, status=400)
-        
-        try:
-            subscriber, created = NewsletterSubscriber.objects.get_or_create(
-                email=email,
-                defaults={'is_active': True}
-            )
-            
-            if created:
-                message = 'Thank you for subscribing!'
-            else:
-                message = 'You are already subscribed!'
-            
-            return Response({'status': 'success', 'message': message}, status=200)
-            
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
