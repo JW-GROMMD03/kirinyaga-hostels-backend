@@ -71,6 +71,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    'apps.accounts.middleware.AuditLogMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'apps.accounts.middleware.RateLimitMiddleware',
     'apps.accounts.middleware.SingleSessionMiddleware',
@@ -103,37 +104,68 @@ TEMPLATES = [
 WSGI_APPLICATION = 'core.wsgi.application'
 
 # ============================================
-# DATABASE - Use DATABASE_URL for production
+# DATABASE - Smart fallback for local development
 # ============================================
-# Try to use DATABASE_URL from environment (Render/Supabase)
-DATABASE_URL = os.getenv('DATABASE_URL')
 
-if DATABASE_URL:
-    # Production database (Supabase, Render PostgreSQL, etc.)
-    DATABASES = {
-        'default': dj_database_url.config(
-            default=os.environ.get('DATABASE_URL'),
-            conn_max_age=600,
-            ssl_require=True
-        )
-    }
-else:
-    # Local development database
-    DATABASES = {
+def get_database_config():
+    """
+    Smart database configuration with fallbacks:
+    1. Use DATABASE_URL if provided (production)
+    2. Use local PostgreSQL if configured
+    3. Fall back to SQLite for simple local development
+    """
+    
+    # Check if we're on Render (production)
+    is_render = os.environ.get('RENDER', False)
+    
+    # Priority 1: DATABASE_URL (production)
+    database_url = os.getenv('DATABASE_URL')
+    if database_url:
+        print("📊 Using PostgreSQL from DATABASE_URL")
+        return {
+            'default': dj_database_url.config(
+                default=database_url,
+                conn_max_age=600,
+                ssl_require=True
+            )
+        }
+    
+    # Priority 2: Local PostgreSQL (if credentials provided)
+    db_name = os.getenv('DB_NAME')
+    db_user = os.getenv('DB_USER')
+    db_password = os.getenv('DB_PASSWORD')
+    
+    if db_name and db_user and db_password:
+        try:
+            print("📊 Attempting to connect to local PostgreSQL...")
+            return {
+                'default': {
+                    'ENGINE': 'django.db.backends.postgresql',
+                    'NAME': db_name,
+                    'USER': db_user,
+                    'PASSWORD': db_password,
+                    'HOST': os.getenv('DB_HOST', 'localhost'),
+                    'PORT': os.getenv('DB_PORT', '5432'),
+                    'OPTIONS': {
+                        'connect_timeout': 5,
+                    },
+                }
+            }
+        except Exception as e:
+            print(f"⚠️ Local PostgreSQL connection failed: {e}")
+            print("📁 Falling back to SQLite...")
+    
+    # Priority 3: SQLite (simple local development)
+    print("📁 Using SQLite database for local development")
+    return {
         'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME', 'kirinyaga_hostels'),
-            'USER': os.getenv('DB_USER', 'postgres'),
-            'PASSWORD': os.getenv('DB_PASSWORD', ''),
-            'HOST': os.getenv('DB_HOST', 'localhost'),
-            'PORT': os.getenv('DB_PORT', '5432'),
-            'OPTIONS': {
-                'sslmode': 'require' if not DEBUG else 'disable',
-                'connect_timeout': 30,
-            },
-            'CONN_MAX_AGE': 60,
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
         }
     }
+
+# Apply database configuration
+DATABASES = get_database_config()
 
 # ============================================
 # FREE TIER CONFIGURATION
@@ -226,7 +258,7 @@ SIMPLE_JWT = {
 # ============================================
 # CORS SETTINGS - FIXED VERSION
 # ============================================
-# Start with hardcoded defaults
+
 CORS_ALLOWED_ORIGINS = [
     'https://kirinyaga-hostels-frontend.onrender.com',
     'http://localhost:5500',

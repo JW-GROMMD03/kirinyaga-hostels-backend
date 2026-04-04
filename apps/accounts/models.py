@@ -654,15 +654,47 @@ class AdminNotification(models.Model):
 
 
 class AuditLog(models.Model):
+    ACTION_CATEGORIES = (
+        ('auth', 'Authentication'),
+        ('hostel', 'Hostel Operation'),
+        ('booking', 'Booking'),
+        ('review', 'Review'),
+        ('profile', 'Profile Update'),
+        ('payment', 'Payment'),
+        ('admin', 'Admin Action'),
+        ('system', 'System'),
+        ('view', 'View Action'),
+    )
+    
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     action = models.CharField(max_length=255)
+    action_category = models.CharField(max_length=20, choices=ACTION_CATEGORIES, default='system')
     ip_address = models.GenericIPAddressField()
     user_agent = models.TextField(blank=True)
     details = models.JSONField(default=dict)
     timestamp = models.DateTimeField(auto_now_add=True)
     
+    # Enhanced fields
+    resource_type = models.CharField(max_length=100, blank=True, null=True)
+    resource_id = models.CharField(max_length=100, blank=True, null=True)
+    request_method = models.CharField(max_length=10, blank=True, null=True)
+    response_status = models.IntegerField(null=True, blank=True)
+    session_id = models.CharField(max_length=100, blank=True, null=True)
+    old_value = models.JSONField(default=dict, blank=True)
+    new_value = models.JSONField(default=dict, blank=True)
+    
     class Meta:
         ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['-timestamp']),
+            models.Index(fields=['user', 'action_category']),
+            models.Index(fields=['action']),
+            models.Index(fields=['resource_type', 'resource_id']),
+            models.Index(fields=['timestamp']),
+        ]
+    
+    def __str__(self):
+        return f"{self.timestamp} - {self.user.email if self.user else 'Anonymous'} - {self.action}"
 
 
 class SystemSettings(models.Model):

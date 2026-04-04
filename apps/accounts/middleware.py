@@ -1,5 +1,6 @@
 import time
 import logging
+import json
 from django.utils import timezone
 from django.http import JsonResponse
 from django.conf import settings
@@ -7,6 +8,270 @@ from rest_framework import status
 from .models import User, AuditLog
 
 logger = logging.getLogger(__name__)
+
+
+def get_client_ip(request):
+    """Helper function to get client IP address"""
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0]
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    return ip
+
+
+class AuditLogMiddleware:
+    """
+    Automatically log ALL user actions across the system.
+    This middleware captures every request made by authenticated users.
+    """
+    
+    def __init__(self, get_response):
+        self.get_response = get_response
+        
+    def __call__(self, request):
+        # Skip logging for static/media files and certain paths
+        skip_paths = ['/static/', '/media/', '/admin/jsi18n/', '/favicon.ico']
+        if any(request.path.startswith(path) for path in skip_paths):
+            return self.get_response(request)
+        
+        # Get client IP
+        ip_address = get_client_ip(request)
+        
+        # Determine action based on URL and method
+        action, category, resource_type, resource_id = self.determine_action(request)
+        
+        # Get request body for POST/PUT/PATCH
+        request_body = None
+        if request.method in ['POST', 'PUT', 'PATCH'] and request.body:
+            try:
+                # Try to parse as JSON
+                request_body = json.loads(request.body) if request.body else None
+                # Don't log passwords
+                if request_body and isinstance(request_body, dict):
+                    if 'password' in request_body:
+                        request_body['password'] = '********'
+                    if 'new_password' in request_body:
+                        request_body['new_password'] = '********'
+                    if 'password_confirm' in request_body:
+                        request_body['password_confirm'] = '********'
+            except:
+                request_body = str(request.body)[:500]
+        
+        # Process the request
+        response = self.get_response(request)
+        
+        # Log if user is authenticated OR it's an auth action
+        should_log = (
+            (request.user and request.user.is_authenticated) or
+            category == 'auth' or
+            request.method in ['POST', 'PUT', 'DELETE']  # Log all write operations
+        )
+        
+        if should_log:
+            try:
+                # Don't log every single GET request to avoid clutter
+                if request.method == 'GET' and category not in ['auth', 'admin']:
+                    # Only log important GET requests (like viewing hostels)
+                    if not any(x in request.path for x in ['/api/hostels/', '/api/hostel/']):
+                        return response
+                
+                # Create audit log entry
+                AuditLog.objects.create(
+                    user=request.user if request.user.is_authenticated else None,
+                    action=action,
+                    action_category=category,
+                    ip_address=ip_address,
+                    user_agent=request.META.get('HTTP_USER_AGENT', '')[:500],
+                    request_method=request.method,
+                    response_status=response.status_code,
+                    session_id=request.session.session_key,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    details={
+                        'path': request.path,
+                        'query_params': dict(request.GET.items()),
+                        'method': request.method,
+                        'request_body': request_body,
+                        'user_agent': request.META.get('HTTP_USER_AGENT', '')[:200],
+                        'response_status': response.status_code,
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Failed to create audit log: {e}")
+        
+        return response
+    
+    def determine_action(self, request):
+        """Determine action name, category, resource type based on URL path"""
+        path = request.path
+        method = request.method
+        
+        # Default values
+        action = f"{method} {path}"
+        category = 'system'
+        resource_type = None
+        resource_id = None
+        
+        # Extract resource ID from path if present (UUID pattern)
+        path_parts = path.strip('/').split('/')
+        for i, part in enumerate(path_parts):
+            # UUID pattern detection (simple check for length and dashes)
+            if len(part) > 20 and '-' in part and len(part) < 40:
+                resource_id = part
+                if i > 0:
+                    resource_type = path_parts[i-1].capitalize()
+                break
+        
+        # Authentication actions
+        if '/api/auth/' in path or '/login' in path or '/signup' in path:
+            category = 'auth'
+            if 'student/login' in path or 'owner/login' in path or 'admin/login' in path or '/login' in path:
+                if method == 'POST':
+                    action = 'LOGIN'
+                else:
+                    action = 'LOGIN_ATTEMPT'
+            elif 'logout' in path:
+                action = 'LOGOUT'
+            elif 'student/signup' in path or 'student/register' in path:
+                action = 'STUDENT_SIGNUP'
+            elif 'owner/signup' in path or 'owner/register' in path:
+                action = 'OWNER_SIGNUP'
+            elif 'verify-email' in path:
+                action = 'VERIFY_EMAIL'
+            elif 'resend-verification' in path:
+                action = 'RESEND_VERIFICATION'
+            elif 'reset-password' in path or 'password-reset' in path:
+                if 'request' in path or method == 'POST':
+                    action = 'PASSWORD_RESET_REQUEST'
+                else:
+                    action = 'PASSWORD_RESET_CONFIRM'
+            elif '2fa' in path or 'two-factor' in path:
+                if 'enable' in path:
+                    action = '2FA_ENABLE'
+                elif 'disable' in path:
+                    action = '2FA_DISABLE'
+                elif 'verify' in path:
+                    action = '2FA_VERIFY'
+                else:
+                    action = '2FA_OTP_SENT'
+        
+        # Hostel actions
+        elif '/api/hostels/' in path:
+            category = 'hostel'
+            resource_type = 'Hostel'
+            
+            if method == 'GET':
+                if len(path_parts) > 3 and path_parts[3] and len(path_parts[3]) > 20:
+                    action = 'VIEW_HOSTEL_DETAIL'
+                else:
+                    action = 'VIEW_HOSTELS_LIST'
+            elif method == 'POST':
+                action = 'CREATE_HOSTEL'
+            elif method == 'PUT' or method == 'PATCH':
+                action = 'UPDATE_HOSTEL'
+            elif method == 'DELETE':
+                action = 'DELETE_HOSTEL'
+        
+        # Owner hostel management
+        elif '/api/owner/hostels/' in path:
+            category = 'hostel'
+            resource_type = 'Hostel'
+            if method == 'GET':
+                action = 'VIEW_OWNER_HOSTELS'
+            elif method == 'POST':
+                action = 'CREATE_HOSTEL'
+            elif method == 'PUT' or method == 'PATCH':
+                action = 'UPDATE_HOSTEL'
+            elif method == 'DELETE':
+                action = 'DELETE_HOSTEL'
+        
+        # Saved hostels
+        elif '/api/saved-hostels/' in path:
+            category = 'hostel'
+            resource_type = 'SavedHostel'
+            if method == 'POST':
+                action = 'SAVE_HOSTEL'
+            elif method == 'DELETE':
+                action = 'UNSAVE_HOSTEL'
+            elif method == 'GET':
+                action = 'VIEW_SAVED_HOSTELS'
+        
+        # Booking actions
+        elif '/api/bookings/' in path:
+            category = 'booking'
+            resource_type = 'Booking'
+            if method == 'POST':
+                action = 'CREATE_BOOKING'
+            elif method == 'PUT' or method == 'PATCH':
+                action = 'UPDATE_BOOKING'
+            elif method == 'DELETE':
+                action = 'CANCEL_BOOKING'
+            elif method == 'GET':
+                action = 'VIEW_BOOKINGS'
+        
+        # Review actions
+        elif '/api/reviews/' in path:
+            category = 'review'
+            resource_type = 'Review'
+            if method == 'POST':
+                action = 'CREATE_REVIEW'
+            elif method == 'PUT' or method == 'PATCH':
+                action = 'UPDATE_REVIEW'
+            elif method == 'DELETE':
+                action = 'DELETE_REVIEW'
+            elif method == 'GET':
+                action = 'VIEW_REVIEWS'
+        
+        # Profile actions
+        elif '/api/profile/' in path or '/api/user/' in path:
+            category = 'profile'
+            resource_type = 'User'
+            if method == 'PUT' or method == 'PATCH':
+                action = 'UPDATE_PROFILE'
+            elif method == 'GET':
+                action = 'VIEW_PROFILE'
+        
+        # Admin actions
+        elif '/api/admin/' in path or path.startswith('/admin/'):
+            category = 'admin'
+            if 'approve' in path.lower():
+                if 'owner' in path.lower():
+                    action = 'ADMIN_APPROVE_OWNER'
+                elif 'hostel' in path.lower():
+                    action = 'ADMIN_APPROVE_HOSTEL'
+                else:
+                    action = 'ADMIN_APPROVE'
+            elif 'reject' in path.lower():
+                action = 'ADMIN_REJECT'
+            elif 'delete' in path.lower():
+                action = 'ADMIN_DELETE'
+            elif 'block' in path.lower() or 'unblock' in path.lower() or 'toggle-status' in path.lower():
+                action = 'ADMIN_TOGGLE_USER_STATUS'
+            elif 'settings' in path.lower():
+                action = 'ADMIN_UPDATE_SETTINGS'
+            elif 'dashboard' in path.lower():
+                action = 'ADMIN_VIEW_DASHBOARD'
+            elif 'stats' in path.lower():
+                action = 'ADMIN_VIEW_STATS'
+            else:
+                action = f"ADMIN_{method}_{path_parts[-1] if path_parts else 'ACTION'}"
+        
+        # Payment actions
+        elif '/api/payments/' in path or '/api/mpesa/' in path:
+            category = 'payment'
+            resource_type = 'Payment'
+            if method == 'POST':
+                action = 'INITIATE_PAYMENT'
+            elif method == 'GET':
+                action = 'VIEW_PAYMENT'
+        
+        # Support/feedback
+        elif '/api/support/' in path:
+            category = 'system'
+            action = 'SUPPORT_REQUEST'
+        
+        return action, category, resource_type, resource_id
 
 
 class RateLimitMiddleware:
@@ -22,11 +287,7 @@ class RateLimitMiddleware:
             return self.get_response(request)
 
         # Get client IP
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(',')[0]
-        else:
-            ip = request.META.get('REMOTE_ADDR')
+        ip = get_client_ip(request)
 
         # Rate limiting for login attempts
         if request.path.endswith('/login/') and request.method == 'POST':
@@ -40,6 +301,19 @@ class RateLimitMiddleware:
             if cache_key in self.rate_limit_cache:
                 attempts = self.rate_limit_cache[cache_key]['attempts']
                 if attempts >= 5:
+                    # Log rate limit hit
+                    logger.warning(f"Rate limit exceeded for IP {ip}")
+                    try:
+                        AuditLog.objects.create(
+                            user=None,
+                            action='RATE_LIMIT_EXCEEDED',
+                            ip_address=ip,
+                            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                            details={'path': request.path, 'attempts': attempts}
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to log rate limit: {e}")
+                    
                     return JsonResponse(
                         {'error': 'Too many login attempts. Please try again later.'},
                         status=429
@@ -67,6 +341,23 @@ class SingleSessionMiddleware:
             if stored_session_key and stored_session_key != current_session_key:
                 # Another session exists, logout this one
                 from django.contrib.auth import logout
+                
+                # Log session conflict
+                try:
+                    AuditLog.objects.create(
+                        user=request.user,
+                        action='SESSION_CONFLICT',
+                        ip_address=get_client_ip(request),
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                        details={
+                            'current_session': current_session_key,
+                            'stored_session': stored_session_key,
+                            'action_taken': 'logout'
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to log session conflict: {e}")
+                
                 logout(request)
                 return JsonResponse(
                     {'error': 'Another session is active. Please login again.'},
@@ -103,7 +394,7 @@ class IPWhitelistMiddleware:
             return response
         
         # Get client IP
-        client_ip = self.get_client_ip(request)
+        client_ip = get_client_ip(request)
         
         # Admin paths to protect (including API admin endpoints)
         admin_paths = [
@@ -193,15 +484,6 @@ class IPWhitelistMiddleware:
             logger.info(f"✅ Admin access allowed from whitelisted IP: {client_ip}")
         
         return self.get_response(request)
-    
-    def get_client_ip(self, request):
-        """Get the client IP address from request"""
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(',')[0]
-        else:
-            ip = request.META.get('REMOTE_ADDR')
-        return ip
 
 
 class AdminActivityMiddleware:
@@ -227,18 +509,17 @@ class AdminActivityMiddleware:
             if request.method != 'GET':
                 try:
                     # Get client IP
-                    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-                    if x_forwarded_for:
-                        ip = x_forwarded_for.split(',')[0]
-                    else:
-                        ip = request.META.get('REMOTE_ADDR')
+                    ip = get_client_ip(request)
                     
                     # Log to audit log
                     AuditLog.objects.create(
                         user=request.user,
                         action=f"ADMIN_{request.method}_{request.path.replace('/', '_')}",
+                        action_category='admin',
                         ip_address=ip,
                         user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                        request_method=request.method,
+                        response_status=response.status_code,
                         details={
                             'path': request.path,
                             'method': request.method,

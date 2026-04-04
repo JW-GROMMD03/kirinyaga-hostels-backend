@@ -120,6 +120,10 @@ class DashboardStatsView(APIView):
         new_users_today = User.objects.filter(date_joined__gte=today_start).count()
         new_users_week = User.objects.filter(date_joined__gte=week_ago).count()
         
+        # Blocked users
+        blocked_students = User.objects.filter(role='student', is_active=False).count()
+        blocked_owners = User.objects.filter(role='owner', is_active=False).count()
+        
         # User verification stats
         verified_users = User.objects.filter(email_verified=True).count()
         twofa_enabled = User.objects.filter(is_2fa_enabled=True).count()
@@ -152,10 +156,7 @@ class DashboardStatsView(APIView):
         # Fraud stats
         high_risk_users = 0
         try:
-            # Count users with high failed attempts
             high_risk_users += User.objects.filter(failed_login_attempts__gte=5).count()
-            
-            # Count owners with high fraud score
             high_risk_users += User.objects.filter(
                 role='owner',
                 owner_profile__fraud_score__gte=70
@@ -165,18 +166,112 @@ class DashboardStatsView(APIView):
             
         locked_accounts = User.objects.filter(locked_until__gte=now).count()
         
-        # Recent activity (last 20 audit logs)
-        recent_activity = AuditLog.objects.select_related('user').order_by('-timestamp')[:20]
-        activity_data = [{
-            'id': log.id,
-            'timestamp': log.timestamp,
-            'user': log.user.email if log.user else 'System',
-            'action': log.action,
-            'details': log.details,
-            'ip_address': log.ip_address
-        } for log in recent_activity]
+        # ========== FIXED: Recent Activity - LOAD LIVE DATA ==========
+        recent_activity = AuditLog.objects.select_related('user').order_by('-timestamp')[:50]
+        
+        activity_data = []
+        for log in recent_activity:
+            # Format action for display with icons
+            action_display = log.action
+            icon = '📌'
+            
+            if log.action == 'LOGIN_FAILED':
+                icon = '❌'
+                action_display = 'Failed Login Attempt'
+            elif log.action == 'LOGIN_SUCCESS':
+                icon = '✅'
+                action_display = 'Successful Login'
+            elif log.action == 'LOGIN_FAILED_WRONG_PORTAL':
+                icon = '⚠️'
+                action_display = 'Wrong Portal Login Attempt'
+            elif log.action == 'CREATE_HOSTEL':
+                icon = '🏠'
+                action_display = 'Created Hostel'
+            elif log.action == 'UPDATE_HOSTEL':
+                icon = '✏️'
+                action_display = 'Updated Hostel'
+            elif log.action == 'DELETE_HOSTEL':
+                icon = '🗑️'
+                action_display = 'Deleted Hostel'
+            elif log.action == 'VIEW_HOSTEL' or log.action == 'VIEW_HOSTEL_DETAIL':
+                icon = '👁️'
+                action_display = 'Viewed Hostel'
+            elif log.action == 'VIEW_HOSTELS_LIST':
+                icon = '📋'
+                action_display = 'Viewed Hostels List'
+            elif log.action == 'STUDENT_SIGNUP':
+                icon = '📝'
+                action_display = 'Student Registered'
+            elif log.action == 'OWNER_SIGNUP':
+                icon = '📝'
+                action_display = 'Owner Registered'
+            elif log.action == 'TOGGLE_USER_STATUS':
+                icon = '🔒'
+                action_display = 'User Status Changed'
+            elif log.action == 'APPROVE_OWNER':
+                icon = '✓'
+                action_display = 'Owner Approved'
+            elif log.action == 'APPROVE_HOSTEL':
+                icon = '✓'
+                action_display = 'Hostel Approved'
+            elif log.action == 'REJECT_HOSTEL':
+                icon = '✗'
+                action_display = 'Hostel Rejected'
+            elif log.action == 'SAVE_HOSTEL':
+                icon = '⭐'
+                action_display = 'Saved Hostel'
+            elif log.action == 'UNSAVE_HOSTEL':
+                icon = '☆'
+                action_display = 'Unsaved Hostel'
+            elif log.action == 'CREATE_BOOKING':
+                icon = '📅'
+                action_display = 'Created Booking'
+            elif log.action == 'CANCEL_BOOKING':
+                icon = '🚫'
+                action_display = 'Cancelled Booking'
+            elif log.action == 'CREATE_REVIEW':
+                icon = '⭐'
+                action_display = 'Wrote Review'
+            elif log.action == 'PASSWORD_RESET':
+                icon = '🔑'
+                action_display = 'Password Reset'
+            elif log.action == '2FA_ENABLED':
+                icon = '🔐'
+                action_display = '2FA Enabled'
+            elif log.action == '2FA_DISABLED':
+                icon = '🔓'
+                action_display = '2FA Disabled'
+            elif log.action == 'UPDATE_PROFILE':
+                icon = '👤'
+                action_display = 'Updated Profile'
+            
+            activity_data.append({
+                'id': log.id,
+                'timestamp': log.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                'user': log.user.email if log.user else 'Anonymous',
+                'user_name': log.user.full_name if log.user else 'System',
+                'action': action_display,
+                'action_code': log.action,
+                'category': log.action_category or 'system',
+                'icon': icon,
+                'details': log.details,
+                'ip_address': log.ip_address,
+                'resource_type': log.resource_type,
+                'resource_id': log.resource_id,
+            })
 
-        # User growth data for charts (last 6 months)
+        # Activity summary by category (last 7 days)
+        activity_summary = {
+            'auth': AuditLog.objects.filter(action_category='auth', timestamp__gte=week_ago).count(),
+            'hostel': AuditLog.objects.filter(action_category='hostel', timestamp__gte=week_ago).count(),
+            'booking': AuditLog.objects.filter(action_category='booking', timestamp__gte=week_ago).count(),
+            'review': AuditLog.objects.filter(action_category='review', timestamp__gte=week_ago).count(),
+            'admin': AuditLog.objects.filter(action_category='admin', timestamp__gte=week_ago).count(),
+            'profile': AuditLog.objects.filter(action_category='profile', timestamp__gte=week_ago).count(),
+            'view': AuditLog.objects.filter(action_category='view', timestamp__gte=week_ago).count(),
+        }
+
+        # User growth data for charts
         months = []
         student_growth = []
         owner_growth = []
@@ -205,6 +300,8 @@ class DashboardStatsView(APIView):
                 'total_users': total_users,
                 'total_students': total_students,
                 'total_owners': total_owners,
+                'blocked_students': blocked_students,
+                'blocked_owners': blocked_owners,
                 'new_today': new_users_today,
                 'new_week': new_users_week,
                 'verified': verified_users,
@@ -238,6 +335,7 @@ class DashboardStatsView(APIView):
                 'locked': locked_accounts,
             },
             'recent_activity': activity_data,
+            'activity_summary': activity_summary,
             'user_growth': {
                 'labels': months,
                 'students': student_growth,
@@ -1249,26 +1347,35 @@ class SendBulkNotificationView(APIView):
 
 # ==================== AUDIT LOGS ====================
 class AuditLogListView(APIView):
-    """List all audit logs"""
+    """List all audit logs with enhanced filtering and pagination"""
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        # Get filter parameters
         action = request.query_params.get('action')
+        category = request.query_params.get('category')
         user_email = request.query_params.get('user')
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
+        resource_type = request.query_params.get('resource_type')
         
         queryset = AuditLog.objects.select_related('user').order_by('-timestamp')
         
+        # Apply filters
         if action:
             queryset = queryset.filter(action__icontains=action)
+        if category:
+            queryset = queryset.filter(action_category=category)
         if user_email:
             queryset = queryset.filter(user__email__icontains=user_email)
         if start_date:
             queryset = queryset.filter(timestamp__gte=start_date)
         if end_date:
             queryset = queryset.filter(timestamp__lte=end_date)
+        if resource_type:
+            queryset = queryset.filter(resource_type=resource_type)
         
+        # Pagination
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 50))
         start = (page - 1) * page_size
@@ -1277,20 +1384,39 @@ class AuditLogListView(APIView):
         total = queryset.count()
         logs = queryset[start:end]
         
-        data = [{
-            'id': log.id,
-            'timestamp': log.timestamp,
-            'user': log.user.email if log.user else 'System',
-            'action': log.action,
-            'details': log.details,
-            'ip_address': log.ip_address,
-            'user_agent': log.user_agent
-        } for log in logs]
+        # Get unique actions and categories for filter dropdowns
+        unique_actions = list(AuditLog.objects.values_list('action', flat=True).distinct()[:100])
+        unique_categories = list(AuditLog.objects.values_list('action_category', flat=True).distinct())
+        unique_resource_types = list(AuditLog.objects.exclude(resource_type__isnull=True).values_list('resource_type', flat=True).distinct())
+        
+        data = []
+        for log in logs:
+            data.append({
+                'id': log.id,
+                'timestamp': log.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                'user': log.user.email if log.user else 'System',
+                'user_name': log.user.full_name if log.user else 'System',
+                'action': log.action,
+                'category': log.action_category or 'system',
+                'details': log.details,
+                'ip_address': log.ip_address,
+                'user_agent': log.user_agent[:100] if log.user_agent else '',
+                'resource_type': log.resource_type,
+                'resource_id': log.resource_id,
+                'request_method': log.request_method,
+                'response_status': log.response_status,
+            })
         
         return Response({
             'total': total,
             'page': page,
             'page_size': page_size,
+            'total_pages': (total + page_size - 1) // page_size,
+            'filters': {
+                'available_actions': unique_actions,
+                'available_categories': unique_categories,
+                'available_resource_types': unique_resource_types,
+            },
             'results': data
         })
 
