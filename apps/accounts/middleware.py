@@ -11,12 +11,16 @@ logger = logging.getLogger(__name__)
 
 
 def get_client_ip(request):
-    """Helper function to get client IP address"""
+    """Get client IP address with fallback"""
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
     if x_forwarded_for:
         ip = x_forwarded_for.split(',')[0]
     else:
         ip = request.META.get('REMOTE_ADDR')
+    
+    # Return default if no IP found
+    if not ip:
+        ip = '0.0.0.0'
     return ip
 
 

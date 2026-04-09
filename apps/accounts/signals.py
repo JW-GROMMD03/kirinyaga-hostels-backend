@@ -9,6 +9,11 @@ from apps.reviews.models import Review
 from apps.subscriptions.models import OwnerSubscription
 
 
+def get_default_ip():
+    """Return default IP address for signal logs"""
+    return '0.0.0.0'
+
+
 @receiver(post_save, sender=Hostel)
 def log_hostel_save(sender, instance, created, **kwargs):
     """Log when a hostel is created or updated"""
@@ -37,8 +42,9 @@ def log_hostel_save(sender, instance, created, **kwargs):
         action_category='hostel',
         resource_type='Hostel',
         resource_id=str(instance.id),
+        ip_address=get_default_ip(),  # FIXED: Added default IP
+        user_agent='System Signal',   # FIXED: Added default user agent
         details=details,
-        ip_address=None,
     )
 
 
@@ -71,6 +77,8 @@ def log_hostel_delete(sender, instance, **kwargs):
         action_category='hostel',
         resource_type='Hostel',
         resource_id=str(instance.id),
+        ip_address=get_default_ip(),  # FIXED: Added default IP
+        user_agent='System Signal',   # FIXED: Added default user agent
         details={
             'hostel_name': instance.name,
             'owner_email': instance.owner.email if instance.owner else None,
@@ -98,6 +106,8 @@ def log_booking_save(sender, instance, created, **kwargs):
         action_category='booking',
         resource_type='Booking',
         resource_id=str(instance.id),
+        ip_address=get_default_ip(),  # FIXED: Added default IP
+        user_agent='System Signal',   # FIXED: Added default user agent
         details=details,
     )
 
@@ -112,6 +122,8 @@ def log_review_save(sender, instance, created, **kwargs):
             action_category='review',
             resource_type='Review',
             resource_id=str(instance.id),
+            ip_address=get_default_ip(),  # FIXED: Added default IP
+            user_agent='System Signal',   # FIXED: Added default user agent
             details={
                 'hostel_name': instance.hostel.name if instance.hostel else None,
                 'rating': instance.rating,
@@ -138,5 +150,7 @@ def log_subscription_save(sender, instance, created, **kwargs):
         action_category='payment',
         resource_type='Subscription',
         resource_id=str(instance.id),
+        ip_address=get_default_ip(),  # FIXED: Added default IP
+        user_agent='System Signal',   # FIXED: Added default user agent
         details=details,
     )
