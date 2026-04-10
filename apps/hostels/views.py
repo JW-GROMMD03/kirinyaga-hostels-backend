@@ -17,6 +17,7 @@ from .serializers import (
     AvailabilitySerializer, SimpleHostelSerializer
 )
 from apps.subscriptions.models import OwnerSubscription
+from apps.subscriptions.utils import check_hostel_creation_eligibility, get_owner_subscription_status
 from apps.accounts.models import AuditLog
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ def get_client_ip(request):
         ip = x_forwarded_for.split(',')[0]
     else:
         ip = request.META.get('REMOTE_ADDR')
-    return ip
+    return ip or '0.0.0.0'
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -106,8 +107,9 @@ class HostelDetailView(generics.RetrieveAPIView):
         AuditLog.objects.create(
             user=request.user if request.user.is_authenticated else None,
             action='VIEW_HOSTEL',
+            action_category='view',
             ip_address=get_client_ip(request),
-            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            user_agent=request.META.get('HTTP_USER_AGENT', '')[:500],
             details={'hostel_id': str(instance.id), 'name': instance.name}
         )
         
@@ -139,15 +141,10 @@ class OwnerHostelListView(generics.ListAPIView):
         
         count = queryset.count()
         print(f"Found {count} hostels")
-        print(f"SQL: {str(queryset.query)}")
         
         if count == 0:
             total_hostels = Hostel.objects.count()
             print(f"Total hostels in database: {total_hostels}")
-            if total_hostels > 0:
-                sample = Hostel.objects.first()
-                if sample:
-                    print(f"Sample hostel - ID: {sample.id}, Name: {sample.name}, Owner ID: {sample.owner_id}")
         
         return queryset
 
@@ -164,9 +161,6 @@ class OwnerHostelListView(generics.ListAPIView):
             
             serializer = self.get_serializer(queryset, many=True)
             print(f"Returning response with {len(serializer.data)} items")
-            
-            if len(serializer.data) > 0:
-                print(f"First hostel data: {serializer.data[0]}")
             
             return Response(serializer.data)
             
@@ -208,31 +202,55 @@ class HostelCreateView(APIView):
         print("\n=== HostelCreateView ===")
         print(f"User: {request.user.email} (ID: {request.user.id})")
         print(f"User role: {request.user.role}")
-        print(f"Request data keys: {list(request.data.keys())}")
-        print(f"Files: {list(request.FILES.keys())}")
         
+        # Check if user is owner
         if request.user.role != 'owner':
             raise PermissionDenied("Only owners can create hostels.")
         
+        # ========== SUBSCRIPTION CHECK ==========
+        # Check if owner can add a new hostel based on subscription
+        can_add, message = check_hostel_creation_eligibility(request.user)
+        
+        if not can_add:
+            # Get subscription status for better error message
+            status_data = get_owner_subscription_status(request.user)
+            
+            error_message = message
+            if not status_data.get('has_active_subscription'):
+                error_message = f"{message} Please subscribe to continue adding hostels. <a href='/owner/subscription-plans.html'>View Plans</a>"
+            elif status_data.get('plan') == 'free' and status_data.get('current_hostels', 0) >= 1:
+                error_message = f"{message} The Free plan allows only 1 hostel per month. Upgrade to add more hostels."
+            elif status_data.get('max_hostels') and status_data.get('current_hostels', 0) >= status_data.get('max_hostels'):
+                error_message = f"{message} Your {status_data.get('plan_display')} plan allows up to {status_data.get('max_hostels')} hostels. Upgrade to add more."
+            
+            return Response(
+                {'error': error_message, 'requires_subscription': True, 'subscription_status': status_data},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Check subscription is active (additional check)
         subscription = OwnerSubscription.objects.filter(
             owner=request.user,
             is_active=True,
             end_date__gte=timezone.now()
         ).first()
+        
         if not subscription:
             return Response(
-                {'error': 'Your subscription has expired. Please renew to add hostels.'},
+                {'error': 'No active subscription found. Please subscribe to add hostels.', 'requires_subscription': True},
                 status=status.HTTP_403_FORBIDDEN
             )
         
+        # Check plan limits
         current_count = Hostel.objects.filter(owner=request.user).count()
         if subscription.plan and subscription.plan.max_hostels > 0:
             if current_count >= subscription.plan.max_hostels:
                 return Response(
-                    {'error': f'You have reached your hostel limit ({subscription.plan.max_hostels}). Upgrade your plan to add more.'},
+                    {'error': f'You have reached your plan limit of {subscription.plan.max_hostels} hostels. Upgrade your plan to add more.'},
                     status=status.HTTP_403_FORBIDDEN
                 )
 
+        # Prepare hostel data
         data = {
             'name': request.data.get('name'),
             'description': request.data.get('description', ''),
@@ -252,6 +270,7 @@ class HostelCreateView(APIView):
         print(f"Hostel created: {hostel.id}")
 
         try:
+            # Handle images
             image_fields = ['photo1', 'photo2', 'photo3', 'photo4', 'photo5', 'photo6']
             for i, field in enumerate(image_fields):
                 if field in request.FILES:
@@ -266,6 +285,7 @@ class HostelCreateView(APIView):
                     )
                     print(f"Image uploaded: {field}")
 
+            # Handle amenities
             amenities = request.data.getlist('amenities[]')
             if amenities:
                 for amenity_id in amenities:
@@ -275,11 +295,13 @@ class HostelCreateView(APIView):
                     )
                 print(f"Added {len(amenities)} amenities")
 
+            # Audit log
             AuditLog.objects.create(
                 user=request.user,
                 action='CREATE_HOSTEL',
+                action_category='hostel',
                 ip_address=get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                user_agent=request.META.get('HTTP_USER_AGENT', '')[:500],
                 details={'hostel_id': str(hostel.id), 'name': hostel.name}
             )
 
@@ -289,7 +311,6 @@ class HostelCreateView(APIView):
         except Exception as e:
             print(f"Error during image upload or amenity creation: {e}")
             traceback.print_exc()
-            # Re-raise to trigger transaction rollback
             raise
 
 
@@ -310,9 +331,31 @@ class HostelUpdateView(APIView):
                 print(f"Ownership check failed. Hostel owner: {hostel.owner_id}, Request user: {request.user.id}")
                 raise PermissionDenied("You can only edit your own hostels.")
             
+            # Check subscription for update (especially for featuring)
+            subscription = OwnerSubscription.objects.filter(
+                owner=request.user,
+                is_active=True,
+                end_date__gte=timezone.now()
+            ).first()
+            
+            # Check if trying to feature a listing
+            if request.data.get('is_featured') and not subscription:
+                return Response(
+                    {'error': 'You need an active subscription to feature listings. Please subscribe.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            if request.data.get('is_featured') and subscription and subscription.plan:
+                if not subscription.plan.can_feature_listings:
+                    return Response(
+                        {'error': f'Your {subscription.plan.display_name} plan does not include featured listings. Upgrade to Premium or Enterprise.'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            
+            # Update fields
             for field in ['name', 'description', 'room_type', 'capacity', 'price', 
                          'deposit', 'utilities', 'address', 'location_lat', 'location_lng',
-                         'distance_to_university', 'other_amenities']:
+                         'distance_to_university', 'other_amenities', 'is_featured']:
                 if field in request.data:
                     setattr(hostel, field, request.data[field])
             
@@ -320,6 +363,7 @@ class HostelUpdateView(APIView):
             hostel.save()
             print(f"Hostel updated successfully. Approval reset to False")
             
+            # Handle images
             image_fields = ['photo1', 'photo2', 'photo3', 'photo4', 'photo5', 'photo6']
             new_images = False
             for field in image_fields:
@@ -342,6 +386,7 @@ class HostelUpdateView(APIView):
                         )
                         print(f"Image uploaded: {field}")
             
+            # Handle amenities
             if 'amenities[]' in request.data:
                 amenities = request.data.getlist('amenities[]')
                 hostel.amenities.all().delete()
@@ -352,11 +397,13 @@ class HostelUpdateView(APIView):
                     )
                 print(f"Updated {len(amenities)} amenities")
             
+            # Audit log
             AuditLog.objects.create(
                 user=request.user,
                 action='UPDATE_HOSTEL',
+                action_category='hostel',
                 ip_address=get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                user_agent=request.META.get('HTTP_USER_AGENT', '')[:500],
                 details={'hostel_id': str(hostel.id), 'name': hostel.name}
             )
             
@@ -391,11 +438,13 @@ class HostelDeleteView(APIView):
                 print(f"Ownership check failed. Hostel owner: {hostel.owner_id}, Request user: {request.user.id}")
                 raise PermissionDenied("You can only delete your own hostels.")
             
+            # Audit log
             AuditLog.objects.create(
                 user=request.user,
                 action='DELETE_HOSTEL',
+                action_category='hostel',
                 ip_address=get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                user_agent=request.META.get('HTTP_USER_AGENT', '')[:500],
                 details={'hostel_id': str(hostel.id), 'name': hostel.name}
             )
             
@@ -538,7 +587,7 @@ class AvailabilityView(generics.ListCreateAPIView):
 
 
 class HostelStatsView(APIView):
-    """Get statistics for owner's hostels"""
+    """Get statistics for owner's hostels including subscription info"""
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -567,6 +616,9 @@ class HostelStatsView(APIView):
             updated_at__gte=timezone.now() - timezone.timedelta(days=30)
         ).aggregate(total=Sum('views_count'))['total'] or 0
         
+        # Get subscription status
+        subscription_status = get_owner_subscription_status(request.user)
+        
         print(f"Stats - Total: {total}, Approved: {approved}, Pending: {pending}, Featured: {featured}")
         
         return Response({
@@ -577,4 +629,28 @@ class HostelStatsView(APIView):
             'total_views': total_views,
             'recent_views': recent_views,
             'avg_rating': round(avg_rating, 1),
+            'subscription': subscription_status
+        })
+
+
+class CheckHostelLimitView(APIView):
+    """Check if owner can add more hostels based on subscription"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != 'owner':
+            return Response({'error': 'Only owners can access this endpoint'}, status=403)
+        
+        can_add, message = check_hostel_creation_eligibility(request.user)
+        subscription_status = get_owner_subscription_status(request.user)
+        
+        return Response({
+            'can_add_hostel': can_add,
+            'message': message,
+            'current_hostels': subscription_status.get('current_hostels', 0),
+            'max_hostels': subscription_status.get('max_hostels', 1),
+            'plan': subscription_status.get('plan', 'free'),
+            'plan_display': subscription_status.get('plan_display', 'Free'),
+            'has_active_subscription': subscription_status.get('has_active_subscription', False),
+            'requires_upgrade': subscription_status.get('plan') == 'free' and subscription_status.get('current_hostels', 0) >= 1
         })
