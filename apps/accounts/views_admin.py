@@ -2325,7 +2325,7 @@ class OwnerActivityLogView(APIView):
             )
         
         page = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 10))
+        page_size = int(request.query_params.get('page_size', 20))
         
         # Get audit logs for this specific user (owner)
         logs = AuditLog.objects.filter(user=request.user).order_by('-timestamp')
