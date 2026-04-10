@@ -12,6 +12,7 @@ urlpatterns = [
     # Main search endpoint for students to find hostels with filtering
     path('', HostelSearchView.as_view(), name='hostel-list'),
     path('search/', HostelSearchView.as_view(), name='hostel-search'),  # Alias for search
+    path('saved/<int:pk>/', SavedHostelDeleteView.as_view(), name='saved-hostel-delete')
     
     # Get all available amenities for filtering
     path('amenities/', AmenityListView.as_view(), name='amenity-list'),
@@ -116,4 +117,5 @@ urlpatterns = [
     # Get detailed analytics for a hostel
     path('<uuid:pk>/analytics/', HostelStatsView.as_view(), name='hostel-analytics'),
     path('analytics/hostel/<uuid:pk>/', HostelStatsView.as_view(), name='hostel-analytics-alt'),  # Alias
+
 ]
