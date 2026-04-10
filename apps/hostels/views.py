@@ -90,10 +90,19 @@ class HostelSearchView(generics.ListAPIView):
 
 
 class HostelDetailView(generics.RetrieveAPIView):
-    """Public view for hostel details"""
-    queryset = Hostel.objects.filter(is_approved=True, available=True)
+    """Public view for hostel details - owners can see their own unapproved hostels"""
     serializer_class = HostelDetailSerializer
     permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        user = self.request.user
+        
+        # If user is authenticated and is the owner, show their hostels even if not approved
+        if user.is_authenticated and user.role == 'owner':
+            return Hostel.objects.filter(Q(is_approved=True, available=True) | Q(owner=user))
+        
+        # For public (students, guests), only show approved and available hostels
+        return Hostel.objects.filter(is_approved=True, available=True)
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
