@@ -85,6 +85,7 @@ class BookingDetailView(generics.RetrieveUpdateAPIView):
     queryset = Booking.objects.all()
     serializer_class = BookingSerializer
     permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'pk'
 
     def get_queryset(self):
         user = self.request.user
@@ -188,6 +189,7 @@ class OwnerBookingDetailView(generics.RetrieveAPIView):
     """Get detailed booking information for owner"""
     serializer_class = BookingSerializer
     permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'pk'
 
     def get_queryset(self):
         if self.request.user.role != 'owner' and self.request.user.role != 'admin':
@@ -270,7 +272,7 @@ class OwnerBookingStatsView(APIView):
         for hostel in request.user.hostels.all():
             hostel_bookings = bookings.filter(hostel=hostel)
             hostel_stats.append({
-                'hostel_id': hostel.id,
+                'hostel_id': str(hostel.id),
                 'hostel_name': hostel.name,
                 'total_bookings': hostel_bookings.count(),
                 'confirmed': hostel_bookings.filter(status='confirmed').count(),
