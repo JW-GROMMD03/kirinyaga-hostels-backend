@@ -40,6 +40,7 @@ urlpatterns = [
     # Owner Management
     path('api/owners/<uuid:owner_id>/approve/', views_admin.ApproveOwnerView.as_view(), name='approve-owner'),
     path('api/owners/<uuid:owner_id>/toggle-verified/', views_admin.ToggleVerifiedBadgeView.as_view(), name='toggle-verified'),
+    path('api/owner/activity-logs/', views_admin.OwnerActivityLogView.as_view(), name='owner-activity-logs'),
     
     # Hostel Management
     path('api/hostels/', include('apps.hostels.urls')),

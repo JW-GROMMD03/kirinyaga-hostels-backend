@@ -2312,3 +2312,40 @@ class NewsletterSubscribeView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
+class OwnerActivityLogView(APIView):
+    """Get activity logs for the current owner (only their own activities)"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        # Only owners can access their own activity logs
+        if request.user.role != 'owner':
+            return Response(
+                {'error': 'Only owners can access this endpoint'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 10))
+        
+        # Get audit logs for this specific user (owner)
+        logs = AuditLog.objects.filter(user=request.user).order_by('-timestamp')
+        
+        paginator = Paginator(logs, page_size)
+        current_page = paginator.get_page(page)
+        
+        data = [{
+            'id': log.id,
+            'action': log.action,
+            'action_category': log.action_category,
+            'timestamp': log.timestamp,
+            'details': log.details,
+            'ip_address': log.ip_address,
+        } for log in current_page]
+        
+        return Response({
+            'results': data,
+            'total': paginator.count,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': paginator.num_pages
+        })
