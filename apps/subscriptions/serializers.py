@@ -1,54 +1,74 @@
 from rest_framework import serializers
-from .models import SubscriptionPlan, OwnerSubscription
+from .models import SubscriptionPlan, OwnerSubscription, PaymentTransaction, SubscriptionLog
+from django.utils import timezone
 
 class SubscriptionPlanSerializer(serializers.ModelSerializer):
+    features_list = serializers.SerializerMethodField()
+    
     class Meta:
         model = SubscriptionPlan
-        fields = ['id', 'name', 'price', 'duration_days', 'max_hostels', 
-                  'max_images_per_hostel', 'is_featured_listing', 
-                  'priority_support', 'is_active', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'display_name', 'description', 'price_kes', 'duration_days',
+                  'max_hostels', 'max_images_per_hostel', 'can_feature_listings', 
+                  'priority_support', 'analytics_access', 'api_access', 'features_list', 'is_active']
+    
+    def get_features_list(self, obj):
+        return obj.get_features_list()
+
 
 class OwnerSubscriptionSerializer(serializers.ModelSerializer):
-    plan = SubscriptionPlanSerializer(read_only=True)
-    plan_id = serializers.PrimaryKeyRelatedField(
-        queryset=SubscriptionPlan.objects.all(), 
-        source='plan', 
-        write_only=True, 
-        required=False,
-        allow_null=True
-    )
-    owner_email = serializers.CharField(source='owner.email', read_only=True)
+    plan_details = SubscriptionPlanSerializer(source='plan', read_only=True)
+    owner_email = serializers.EmailField(source='owner.email', read_only=True)
     owner_name = serializers.CharField(source='owner.full_name', read_only=True)
-
+    days_remaining = serializers.SerializerMethodField()
+    is_expired = serializers.SerializerMethodField()
+    can_add_hostel = serializers.SerializerMethodField()
+    
     class Meta:
         model = OwnerSubscription
-        fields = [
-            'id', 'owner', 'owner_email', 'owner_name', 'plan', 'plan_id',
-            'start_date', 'end_date', 'is_active', 'auto_renew', 
-            'created_at', 'updated_at'
-        ]
-        read_only_fields = ['owner', 'start_date', 'end_date', 'is_active', 'created_at', 'updated_at']
+        fields = ['id', 'owner', 'owner_email', 'owner_name', 'plan', 'plan_details',
+                  'start_date', 'end_date', 'is_active', 'auto_renew', 'payment_status',
+                  'payment_method', 'payment_reference', 'amount_paid', 'mpesa_receipt_number',
+                  'days_remaining', 'is_expired', 'can_add_hostel', 'admin_notes',
+                  'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_days_remaining(self, obj):
+        return obj.days_remaining()
+    
+    def get_is_expired(self, obj):
+        return obj.is_expired()
+    
+    def get_can_add_hostel(self, obj):
+        can, message = obj.can_add_hostel()
+        return {'can': can, 'message': message}
 
-    def to_representation(self, instance):
-        """Ensure plan data is properly formatted"""
-        data = super().to_representation(instance)
-        
-        # If plan exists but plan data is None, try to populate it
-        if instance.plan and not data.get('plan'):
-            # Manually serialize the plan
-            data['plan'] = {
-                'id': instance.plan.id,
-                'name': instance.plan.name,
-                'price': instance.plan.price,
-                'duration_days': instance.plan.duration_days,
-                'max_hostels': instance.plan.max_hostels,
-                'max_images_per_hostel': instance.plan.max_images_per_hostel,
-                'is_active': instance.plan.is_active
-            }
-        
-        # Ensure is_active is included
-        data['is_active'] = instance.is_active
-            
-        return data
 
-# REMOVED: PaymentSerializer, PaymentInitiateSerializer, PaymentVerifySerializer
+class CreateSubscriptionSerializer(serializers.Serializer):
+    plan_id = serializers.UUIDField()
+    auto_renew = serializers.BooleanField(default=False)
+    payment_method = serializers.CharField(default='mpesa')
+    phone_number = serializers.CharField(required=False, allow_blank=True)
+
+
+class PaymentTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentTransaction
+        fields = '__all__'
+
+
+class SubscriptionLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubscriptionLog
+        fields = '__all__'
+
+
+class MpesaSTKPushSerializer(serializers.Serializer):
+    phone_number = serializers.CharField(max_length=15)
+    plan_id = serializers.UUIDField()
+
+
+class AdminManualSubscriptionSerializer(serializers.Serializer):
+    owner_email = serializers.EmailField()
+    plan_id = serializers.UUIDField()
+    duration_days = serializers.IntegerField(default=30)
+    notes = serializers.CharField(required=False, allow_blank=True)

@@ -1,60 +1,19 @@
 from django.urls import path
 from . import views
-from .views import (
-    PlanListCreateView,
-    PlanRetrieveUpdateDestroyView,
-    PlanDeleteView,
-    OwnerSubscriptionListView,
-    OwnerSubscriptionDetailView,
-    ExtendSubscriptionView,
-    TerminateSubscriptionView,
-    DeleteSubscriptionView,
-    OwnerSubscriptionView,
-    OwnerSubscriptionHistoryView,
-    SubscriptionPlanListView,
-    PlanListView,
-    AdminPlanListView,
-    DebugDbDataView,
-    FixSubscriptionView,
-    TestAllEndpointsView,
-)
 
 urlpatterns = [
-    # ==================== PUBLIC/OWNER ENDPOINTS ====================
-    # Plans
-    path('plans/', SubscriptionPlanListView.as_view(), name='plan-list'),
+    # Public/User endpoints
+    path('plans/', views.SubscriptionPlanListView.as_view(), name='subscription-plans'),
+    path('my/', views.CurrentSubscriptionView.as_view(), name='my-subscription'),
+    path('create/', views.CreateSubscriptionView.as_view(), name='create-subscription'),
+    path('history/', views.SubscriptionHistoryView.as_view(), name='subscription-history'),
+    path('payments/', views.PaymentHistoryView.as_view(), name='payment-history'),
+    path('cancel/', views.CancelSubscriptionView.as_view(), name='cancel-subscription'),
+    path('auto-renew/', views.ToggleAutoRenewView.as_view(), name='toggle-auto-renew'),
+    path('check-hostel-eligibility/', views.CheckHostelEligibilityView.as_view(), name='check-hostel-eligibility'),
     
-    # Owner subscription
-    path('owner-subscriptions/me/', OwnerSubscriptionView.as_view(), name='my-subscription'),
-    path('history/', OwnerSubscriptionHistoryView.as_view(), name='subscription-history'),
-    
-    # REMOVED: All payment-related endpoints
-    # path('initiate-payment/', InitiatePaymentView.as_view(), name='initiate-payment'),
-    # path('payments/', UserPaymentListView.as_view(), name='payment-list'),
-    # path('payments/<uuid:id>/', PaymentDetailView.as_view(), name='payment-detail'),
-    # path('mpesa-callback/', MpesaCallbackView.as_view(), name='mpesa-callback'),
-    
-    # ==================== ADMIN ENDPOINTS ====================
-    # Plan management
-    path('admin/plans/', PlanListCreateView.as_view(), name='admin-plan-list'),
-    path('admin/plans/<int:pk>/', PlanRetrieveUpdateDestroyView.as_view(), name='admin-plan-detail'),
-    path('admin/plans/<int:pk>/delete/', PlanDeleteView.as_view(), name='admin-plan-delete'),
-    
-    # Owner subscription management
-    path('admin/owner-subscriptions/', OwnerSubscriptionListView.as_view(), name='admin-owner-subscriptions'),
-    path('admin/owner-subscriptions/<uuid:pk>/', OwnerSubscriptionDetailView.as_view(), name='admin-owner-subscription-detail'),
-    path('admin/owner-subscriptions/<uuid:pk>/extend/', ExtendSubscriptionView.as_view(), name='admin-extend-subscription'),
-    path('admin/owner-subscriptions/<uuid:pk>/terminate/', TerminateSubscriptionView.as_view(), name='admin-terminate-subscription'),
-    path('admin/owner-subscriptions/<uuid:pk>/delete/', DeleteSubscriptionView.as_view(), name='admin-delete-subscription'),
-    
-    # REMOVED: Payment management endpoints
-    # path('admin/payments/', PaymentListView.as_view(), name='admin-payment-list'),
-    # path('admin/payments/<uuid:id>/', AdminPaymentDetailView.as_view(), name='admin-payment-detail'),
-    
-    # Public and debug endpoints
-    path('public/plans/', PlanListView.as_view(), name='public-plan-list'),
-    path('admin/all-plans/', AdminPlanListView.as_view(), name='admin-all-plans'),
-    path('debug/db-data/', views.DebugDbDataView.as_view(), name='debug-db-data'),
-    path('fix-subscription/', views.FixSubscriptionView.as_view(), name='fix-subscription'),
-    path('debug/test-all/', views.TestAllEndpointsView.as_view(), name='test-all'),
+    # Admin endpoints
+    path('admin/list/', views.AdminSubscriptionListView.as_view(), name='admin-subscriptions'),
+    path('admin/activate/', views.AdminManualActivateSubscriptionView.as_view(), name='admin-activate'),
+    path('admin/stats/', views.AdminSubscriptionStatsView.as_view(), name='admin-stats'),
 ]

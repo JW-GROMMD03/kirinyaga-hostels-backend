@@ -1,364 +1,390 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.utils import timezone
 from django.shortcuts import get_object_or_404
-from django.conf import settings
+from django.utils import timezone
 from django.db import transaction
-from datetime import datetime, timedelta
-from .models import SubscriptionPlan, OwnerSubscription
+from .models import SubscriptionPlan, OwnerSubscription, PaymentTransaction, SubscriptionLog
 from .serializers import (
-    SubscriptionPlanSerializer,
-    OwnerSubscriptionSerializer,
+    SubscriptionPlanSerializer, OwnerSubscriptionSerializer, 
+    CreateSubscriptionSerializer, MpesaSTKPushSerializer,
+    AdminManualSubscriptionSerializer, PaymentTransactionSerializer
 )
-from apps.accounts.models import AuditLog
+from .utils import get_owner_subscription_status, check_hostel_creation_eligibility
+from .mpesa import initiate_mpesa_payment
+from apps.accounts.models import User, AuditLog
+from apps.accounts.views_admin import get_client_ip
 
-# Set up logging
 import logging
 logger = logging.getLogger(__name__)
 
-# Custom permission for admin access
-class IsAdminUser(permissions.BasePermission):
-    def has_permission(self, request, view):
-        return request.user and (request.user.role == 'admin' or request.user.is_superuser)
 
-def get_client_ip(request):
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(',')[0]
-    else:
-        ip = request.META.get('REMOTE_ADDR')
-    return ip
-
-# REMOVED: M-Pesa helper functions (get_access_token, stk_push)
-
-# ==================== PUBLIC PLAN VIEW ====================
 class SubscriptionPlanListView(generics.ListAPIView):
-    """List all active subscription plans"""
+    """List all available subscription plans"""
     queryset = SubscriptionPlan.objects.filter(is_active=True)
     serializer_class = SubscriptionPlanSerializer
-    permission_classes = [permissions.AllowAny]
-
-# ==================== OWNER SUBSCRIPTION SELF-VIEW ====================
-class OwnerSubscriptionView(generics.RetrieveUpdateAPIView):
-    """Get or create subscription for the current owner - always active for free tier"""
-    serializer_class = OwnerSubscriptionSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    def get_object(self):
-        print(f"\n=== OwnerSubscriptionView.get_object() ===")
-        print(f"User: {self.request.user.email}")
-        
-        try:
-            subscription = OwnerSubscription.objects.get(owner=self.request.user)
-            print(f"✅ Found existing subscription: {subscription.id}")
-            
-            # Ensure subscription is active for free tier
-            if not subscription.is_active:
-                subscription.is_active = True
-                subscription.end_date = timezone.now() + timedelta(days=3650)  # 10 years
-                subscription.save()
-                print(f"✅ Activated subscription for free tier")
-            
-            print(f"   Plan: {subscription.plan}")
-            print(f"   Active: {subscription.is_active}")
-            print(f"   Start: {subscription.start_date}")
-            print(f"   End: {subscription.end_date}")
-            return subscription
-            
-        except OwnerSubscription.DoesNotExist:
-            print(f"⚠️ No subscription found, creating new one with free access")
-            
-            # Get a default plan
-            default_plan = SubscriptionPlan.objects.first()
-            
-            subscription = OwnerSubscription.objects.create(
-                owner=self.request.user,
-                plan=default_plan,
-                start_date=timezone.now(),
-                end_date=timezone.now() + timedelta(days=3650),  # 10 years
-                is_active=True
-            )
-            print(f"✅ Created new subscription with free access: {subscription.id}")
-            return subscription
 
-    def retrieve(self, request, *args, **kwargs):
-        print(f"\n=== OwnerSubscriptionView.retrieve() ===")
-        print(f"User: {request.user.email}")
-        
-        try:
-            instance = self.get_object()
-            serializer = self.get_serializer(instance)
-            print(f"📤 Sending response: {serializer.data}")
-            return Response(serializer.data)
-        except Exception as e:
-            print(f"❌ Error: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return Response(
-                {"error": "Failed to retrieve subscription", "details": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-# ==================== OWNER SUBSCRIPTION HISTORY ====================
-class OwnerSubscriptionHistoryView(generics.ListAPIView):
-    """Get subscription history for the logged-in owner"""
-    serializer_class = OwnerSubscriptionSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        return OwnerSubscription.objects.filter(
-            owner=self.request.user
-        ).order_by('-start_date')
-
-# REMOVED: InitiatePaymentView, PaymentDetailView, UserPaymentListView, MpesaCallbackView
-
-# ==================== ADMIN: SUBSCRIPTION PLAN MANAGEMENT ====================
-class PlanListCreateView(generics.ListCreateAPIView):
-    """List all subscription plans or create a new plan (admin only)"""
-    queryset = SubscriptionPlan.objects.all()
-    serializer_class = SubscriptionPlanSerializer
-    permission_classes = [IsAdminUser]
-
-class PlanRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
-    """Retrieve, update or delete a plan (admin only)"""
-    queryset = SubscriptionPlan.objects.all()
-    serializer_class = SubscriptionPlanSerializer
-    permission_classes = [IsAdminUser]
-
-class PlanDeleteView(generics.DestroyAPIView):
-    """Explicit delete endpoint for a plan (admin only)"""
-    queryset = SubscriptionPlan.objects.all()
-    serializer_class = SubscriptionPlanSerializer
-    permission_classes = [IsAdminUser]
-
-# ==================== ADMIN: OWNER SUBSCRIPTION MANAGEMENT ====================
-class OwnerSubscriptionListView(generics.ListAPIView):
-    """List all owner subscriptions (admin only)"""
-    serializer_class = OwnerSubscriptionSerializer
-    permission_classes = [IsAdminUser]
-
-    def get_queryset(self):
-        return OwnerSubscription.objects.select_related('owner', 'plan').all().order_by('-start_date')
-
-class OwnerSubscriptionDetailView(generics.RetrieveAPIView):
-    """Retrieve a specific owner subscription (admin only)"""
-    queryset = OwnerSubscription.objects.all()
-    serializer_class = OwnerSubscriptionSerializer
-    permission_classes = [IsAdminUser]
-    lookup_field = 'pk'
-
-class ExtendSubscriptionView(APIView):
-    """Extend an owner's subscription by a number of days (admin only)"""
-    permission_classes = [IsAdminUser]
-
-    def post(self, request, pk):
-        try:
-            subscription = OwnerSubscription.objects.get(pk=pk)
-            days = request.data.get('days', 30)
-            
-            if subscription.end_date:
-                subscription.end_date += timezone.timedelta(days=days)
-            else:
-                subscription.end_date = timezone.now() + timezone.timedelta(days=days)
-            
-            subscription.is_active = True
-            subscription.save()
-            
-            AuditLog.objects.create(
-                user=request.user,
-                action='SUBSCRIPTION_EXTENDED',
-                ip_address=get_client_ip(request),
-                details={
-                    'subscription_id': str(subscription.id),
-                    'days': days,
-                    'new_end_date': str(subscription.end_date)
-                }
-            )
-            
-            return Response({
-                'status': 'extended',
-                'new_end_date': subscription.end_date
-            })
-        except OwnerSubscription.DoesNotExist:
-            return Response({'error': 'Subscription not found'}, status=404)
-
-class TerminateSubscriptionView(APIView):
-    """Terminate an owner's subscription (set inactive) (admin only)"""
-    permission_classes = [IsAdminUser]
-
-    def post(self, request, pk):
-        try:
-            subscription = OwnerSubscription.objects.get(pk=pk)
-            subscription.is_active = False
-            subscription.save()
-            
-            AuditLog.objects.create(
-                user=request.user,
-                action='SUBSCRIPTION_TERMINATED',
-                ip_address=get_client_ip(request),
-                details={'subscription_id': str(subscription.id)}
-            )
-            
-            return Response({'status': 'terminated'})
-        except OwnerSubscription.DoesNotExist:
-            return Response({'error': 'Subscription not found'}, status=404)
-
-class DeleteSubscriptionView(generics.DestroyAPIView):
-    """Delete an owner subscription record (admin only)"""
-    queryset = OwnerSubscription.objects.all()
-    permission_classes = [IsAdminUser]
-    
-    def perform_destroy(self, instance):
-        AuditLog.objects.create(
-            user=self.request.user,
-            action='SUBSCRIPTION_DELETED',
-            ip_address=get_client_ip(self.request),
-            details={'subscription_id': str(instance.id)}
-        )
-        instance.delete()
-
-# REMOVED: PaymentListView, AdminPaymentDetailView
-
-# ==================== PUBLIC PLAN VIEWS ====================
-class PlanListView(generics.ListAPIView):
-    """Public list of active subscription plans"""
-    queryset = SubscriptionPlan.objects.filter(is_active=True)
-    serializer_class = SubscriptionPlanSerializer
-    permission_classes = [permissions.AllowAny]
-
-class AdminPlanListView(generics.ListAPIView):
-    """Admin view – shows all plans (including inactive)"""
-    queryset = SubscriptionPlan.objects.all()
-    serializer_class = SubscriptionPlanSerializer
-    permission_classes = [permissions.IsAdminUser]
-
-
-# ==================== DEBUG AND FIX ENDPOINTS ====================
-
-class DebugDbDataView(APIView):
-    """Debug endpoint to check database data"""
+class CurrentSubscriptionView(APIView):
+    """Get current user's subscription status"""
     permission_classes = [permissions.IsAuthenticated]
     
     def get(self, request):
-        user = request.user
-        data = {
-            'user': {
-                'email': user.email,
-                'id': str(user.id),
-                'role': user.role
-            },
-            'subscriptions': []
-        }
+        status_data = get_owner_subscription_status(request.user)
+        return Response(status_data)
+
+
+class CreateSubscriptionView(APIView):
+    """Create a new subscription (initiate payment)"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    @transaction.atomic
+    def post(self, request):
+        # Only owners can subscribe
+        if request.user.role != 'owner':
+            return Response(
+                {'error': 'Only hostel owners can subscribe to plans'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
+        serializer = CreateSubscriptionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        plan_id = serializer.validated_data['plan_id']
+        auto_renew = serializer.validated_data.get('auto_renew', False)
+        payment_method = serializer.validated_data.get('payment_method', 'mpesa')
+        phone_number = serializer.validated_data.get('phone_number', '')
+        
+        # Get the plan
         try:
-            subs = OwnerSubscription.objects.filter(owner=user).select_related('plan')
-            for sub in subs:
-                sub_data = {
-                    'id': str(sub.id),
-                    'is_active': sub.is_active,
-                    'start_date': str(sub.start_date) if sub.start_date else None,
-                    'end_date': str(sub.end_date) if sub.end_date else None,
-                    'plan': None
-                }
-                if sub.plan:
-                    sub_data['plan'] = {
-                        'id': sub.plan.id,
-                        'name': sub.plan.name,
-                        'price': float(sub.plan.price),
-                        'max_hostels': sub.plan.max_hostels
-                    }
-                data['subscriptions'].append(sub_data)
-        except Exception as e:
-            data['error'] = str(e)
+            plan = SubscriptionPlan.objects.get(id=plan_id, is_active=True)
+        except SubscriptionPlan.DoesNotExist:
+            return Response({'error': 'Invalid subscription plan'}, status=status.HTTP_404_NOT_FOUND)
         
-        return Response(data)
+        # Check if user already has an active subscription
+        existing_subscription = OwnerSubscription.objects.filter(
+            owner=request.user, 
+            is_active=True
+        ).first()
+        
+        if existing_subscription and not existing_subscription.is_expired():
+            # Handle upgrade
+            if existing_subscription.plan.price_kes >= plan.price_kes:
+                return Response({
+                    'error': f'You already have an active {existing_subscription.plan.display_name} plan. '
+                             f'You can only upgrade to higher tiers.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create new subscription (pending payment)
+        new_subscription = OwnerSubscription.objects.create(
+            owner=request.user,
+            plan=plan,
+            auto_renew=auto_renew,
+            payment_status='pending',
+            payment_method=payment_method,
+            amount_paid=plan.price_kes,
+            is_active=False,
+            start_date=timezone.now(),
+            end_date=timezone.now() + timezone.timedelta(days=plan.duration_days)
+        )
+        
+        # Log creation
+        SubscriptionLog.objects.create(
+            subscription=new_subscription,
+            action='created',
+            new_plan=plan.name,
+            details={'price': str(plan.price_kes)},
+            performed_by=request.user
+        )
+        
+        # Initiate payment based on method
+        if payment_method == 'mpesa':
+            if not phone_number:
+                return Response({
+                    'error': 'Phone number is required for M-Pesa payment'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            payment_result = initiate_mpesa_payment(request.user, plan, phone_number)
+            
+            if payment_result['success']:
+                # Create payment transaction
+                from .models import PaymentTransaction
+                PaymentTransaction.objects.create(
+                    subscription=new_subscription,
+                    amount=plan.price_kes,
+                    payment_method='mpesa',
+                    transaction_id=payment_result.get('checkout_request_id', ''),
+                    phone_number=phone_number,
+                    status='pending'
+                )
+                
+                return Response({
+                    'subscription_id': str(new_subscription.id),
+                    'payment': payment_result,
+                    'message': 'Payment initiated. Please check your phone for the STK push.'
+                }, status=status.HTTP_200_OK)
+            else:
+                new_subscription.payment_status = 'failed'
+                new_subscription.save()
+                return Response({
+                    'error': payment_result.get('message', 'Payment initiation failed')
+                }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Manual/Bank payment (admin will verify)
+        return Response({
+            'subscription_id': str(new_subscription.id),
+            'message': f'Subscription created. Please complete payment via {payment_method}.'
+        }, status=status.HTTP_201_CREATED)
 
 
-class FixSubscriptionView(APIView):
-    """Fix subscription for current user - ensures free access"""
+class CheckHostelEligibilityView(APIView):
+    """Check if owner can add a new hostel"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request):
+        can, message = check_hostel_creation_eligibility(request.user)
+        status_data = get_owner_subscription_status(request.user)
+        
+        return Response({
+            'can_add_hostel': can,
+            'message': message,
+            'subscription_status': status_data
+        })
+
+
+class SubscriptionHistoryView(generics.ListAPIView):
+    """Get user's subscription history"""
+    serializer_class = OwnerSubscriptionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        return OwnerSubscription.objects.filter(owner=self.request.user).order_by('-created_at')
+
+
+class PaymentHistoryView(generics.ListAPIView):
+    """Get user's payment history"""
+    serializer_class = PaymentTransactionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        return PaymentTransaction.objects.filter(
+            subscription__owner=self.request.user
+        ).order_by('-created_at')
+
+
+class CancelSubscriptionView(APIView):
+    """Cancel current subscription (no refund)"""
     permission_classes = [permissions.IsAuthenticated]
     
     def post(self, request):
-        from django.utils import timezone
-        from datetime import timedelta
-        from decimal import Decimal
-        
-        user = request.user
-        result = {'action': None, 'message': ''}
-        
         try:
-            # Get or create subscription
-            sub, created = OwnerSubscription.objects.get_or_create(
-                owner=user,
-                defaults={
-                    'is_active': True,
-                    'start_date': timezone.now(),
-                    'end_date': timezone.now() + timedelta(days=3650)
-                }
-            )
-            
-            # Get a plan
-            plan = SubscriptionPlan.objects.first()
-            if not plan:
-                # Create a default plan
-                plan = SubscriptionPlan.objects.create(
-                    name="Free Plan",
-                    price=Decimal('0.00'),
-                    duration_days=3650,
-                    max_hostels=999999,
-                    max_images_per_hostel=999999,
-                    is_featured_listing=True,
-                    priority_support=True,
-                    is_active=True
-                )
-                result['message'] += "Created default free plan. "
-            
-            # Update subscription to ensure free access
-            sub.plan = plan
-            sub.start_date = timezone.now()
-            sub.end_date = timezone.now() + timedelta(days=3650)  # 10 years
-            sub.is_active = True
-            sub.save()
-            
-            result['action'] = 'updated' if not created else 'created'
-            result['message'] += f"Subscription {result['action']} with free access"
-            result['subscription'] = {
-                'id': str(sub.id),
-                'plan': plan.name,
-                'is_active': sub.is_active,
-                'end_date': str(sub.end_date)
-            }
-            
-        except Exception as e:
-            result['error'] = str(e)
+            subscription = OwnerSubscription.objects.filter(
+                owner=request.user,
+                is_active=True
+            ).latest('created_at')
+        except OwnerSubscription.DoesNotExist:
+            return Response({'error': 'No active subscription found'}, status=status.HTTP_404_NOT_FOUND)
         
-        return Response(result)
+        if subscription.plan.name == 'free':
+            return Response({'error': 'Cannot cancel free plan'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        subscription.is_active = False
+        subscription.auto_renew = False
+        subscription.save()
+        
+        # Log cancellation
+        SubscriptionLog.objects.create(
+            subscription=subscription,
+            action='cancelled',
+            details={'reason': 'User cancelled'},
+            performed_by=request.user
+        )
+        
+        # Audit log
+        AuditLog.objects.create(
+            user=request.user,
+            action='CANCEL_SUBSCRIPTION',
+            ip_address=get_client_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            details={'subscription_id': str(subscription.id), 'plan': subscription.plan.display_name if subscription.plan else 'None'}
+        )
+        
+        return Response({
+            'status': 'success',
+            'message': 'Your subscription has been cancelled. You will have access until the end of your billing period.'
+        })
 
 
-class TestAllEndpointsView(APIView):
-    """Test all subscription-related endpoints"""
+class ToggleAutoRenewView(APIView):
+    """Toggle auto-renew for subscription"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request):
+        try:
+            subscription = OwnerSubscription.objects.filter(
+                owner=request.user,
+                is_active=True
+            ).latest('created_at')
+        except OwnerSubscription.DoesNotExist:
+            return Response({'error': 'No active subscription found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        subscription.auto_renew = not subscription.auto_renew
+        subscription.save()
+        
+        return Response({
+            'status': 'success',
+            'auto_renew': subscription.auto_renew,
+            'message': f'Auto-renew has been {"enabled" if subscription.auto_renew else "disabled"}'
+        })
+
+
+# ==================== ADMIN VIEWS ====================
+
+class AdminSubscriptionListView(generics.ListAPIView):
+    """List all subscriptions (admin only)"""
+    serializer_class = OwnerSubscriptionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        # Check if admin
+        if self.request.user.role != 'admin' and not self.request.user.is_superuser:
+            return OwnerSubscription.objects.none()
+        
+        queryset = OwnerSubscription.objects.all().order_by('-created_at')
+        
+        # Filter by status
+        status_filter = self.request.query_params.get('status')
+        if status_filter == 'active':
+            queryset = queryset.filter(is_active=True)
+        elif status_filter == 'expired':
+            queryset = queryset.filter(end_date__lt=timezone.now())
+        elif status_filter == 'pending':
+            queryset = queryset.filter(payment_status='pending')
+        
+        # Filter by plan
+        plan_filter = self.request.query_params.get('plan')
+        if plan_filter:
+            queryset = queryset.filter(plan__name=plan_filter)
+        
+        # Search by email
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(owner__email__icontains=search)
+        
+        return queryset
+
+
+class AdminManualActivateSubscriptionView(APIView):
+    """Admin manually activates a subscription for a user"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request):
+        # Check if admin
+        if request.user.role != 'admin' and not request.user.is_superuser:
+            return Response({'error': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
+        
+        serializer = AdminManualSubscriptionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        owner_email = serializer.validated_data['owner_email']
+        plan_id = serializer.validated_data['plan_id']
+        duration_days = serializer.validated_data.get('duration_days', 30)
+        notes = serializer.validated_data.get('notes', '')
+        
+        # Get owner
+        try:
+            owner = User.objects.get(email=owner_email)
+        except User.DoesNotExist:
+            return Response({'error': 'Owner not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get plan
+        try:
+            plan = SubscriptionPlan.objects.get(id=plan_id)
+        except SubscriptionPlan.DoesNotExist:
+            return Response({'error': 'Plan not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Deactivate existing subscriptions
+        OwnerSubscription.objects.filter(owner=owner, is_active=True).update(is_active=False)
+        
+        # Create new subscription
+        subscription = OwnerSubscription.objects.create(
+            owner=owner,
+            plan=plan,
+            start_date=timezone.now(),
+            end_date=timezone.now() + timezone.timedelta(days=duration_days),
+            is_active=True,
+            payment_status='completed',
+            payment_method='manual',
+            payment_reference=f'MANUAL-{timezone.now().strftime("%Y%m%d%H%M%S")}',
+            amount_paid=plan.price_kes,
+            auto_renew=False,
+            admin_notes=notes,
+            manually_activated_by=request.user
+        )
+        
+        # Log activation
+        SubscriptionLog.objects.create(
+            subscription=subscription,
+            action='manual_activation',
+            new_plan=plan.name,
+            details={'notes': notes, 'duration_days': duration_days},
+            performed_by=request.user
+        )
+        
+        # Audit log
+        AuditLog.objects.create(
+            user=request.user,
+            action='MANUAL_SUBSCRIPTION_ACTIVATION',
+            ip_address=get_client_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            details={'owner': owner_email, 'plan': plan.display_name, 'duration': duration_days}
+        )
+        
+        return Response({
+            'status': 'success',
+            'message': f'Subscription activated for {owner_email}',
+            'subscription_id': str(subscription.id)
+        })
+
+
+class AdminSubscriptionStatsView(APIView):
+    """Get subscription statistics for admin dashboard"""
     permission_classes = [permissions.IsAuthenticated]
     
     def get(self, request):
-        results = {}
+        if request.user.role != 'admin' and not request.user.is_superuser:
+            return Response({'error': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
         
-        # Test 1: Get current subscription
-        try:
-            sub = OwnerSubscription.objects.get(owner=request.user)
-            results['subscription_exists'] = True
-            results['subscription'] = {
-                'id': str(sub.id),
-                'has_plan': sub.plan is not None,
-                'is_active': sub.is_active,
-                'end_date': str(sub.end_date) if sub.end_date else None
-            }
-        except OwnerSubscription.DoesNotExist:
-            results['subscription_exists'] = False
+        total_subscriptions = OwnerSubscription.objects.count()
+        active_subscriptions = OwnerSubscription.objects.filter(is_active=True, end_date__gt=timezone.now()).count()
+        expired_subscriptions = OwnerSubscription.objects.filter(end_date__lt=timezone.now()).count()
+        pending_payments = OwnerSubscription.objects.filter(payment_status='pending').count()
         
-        # Test 2: Check plans
-        plans = SubscriptionPlan.objects.all()
-        results['plans_count'] = plans.count()
-        results['plans'] = [{'id': p.id, 'name': p.name} for p in plans]
+        # Revenue stats
+        total_revenue = OwnerSubscription.objects.filter(payment_status='completed').aggregate(
+            total=models.Sum('amount_paid')
+        )['total'] or 0
         
-        return Response(results)
+        monthly_revenue = OwnerSubscription.objects.filter(
+            payment_status='completed',
+            created_at__gte=timezone.now() - timezone.timedelta(days=30)
+        ).aggregate(total=models.Sum('amount_paid'))['total'] or 0
+        
+        # Plan distribution
+        from django.db.models import Count
+        plan_distribution = OwnerSubscription.objects.filter(
+            is_active=True
+        ).values('plan__display_name').annotate(count=Count('id'))
+        
+        return Response({
+            'total_subscriptions': total_subscriptions,
+            'active_subscriptions': active_subscriptions,
+            'expired_subscriptions': expired_subscriptions,
+            'pending_payments': pending_payments,
+            'total_revenue': float(total_revenue),
+            'monthly_revenue': float(monthly_revenue),
+            'plan_distribution': list(plan_distribution)
+        })

@@ -853,7 +853,7 @@ class SubscriptionPlanListView(generics.ListCreateAPIView):
     """List and create subscription plans"""
     permission_classes = [IsAdminUser]
     serializer_class = SubscriptionPlanSerializer
-    queryset = SubscriptionPlan.objects.all().order_by('price')
+    queryset = SubscriptionPlan.objects.all().order_by('price_kes')
 
 class SubscriptionPlanDetailView(generics.RetrieveUpdateDestroyAPIView):
     """Get, update or delete a subscription plan"""
@@ -949,7 +949,7 @@ class AdminCancelSubscriptionView(APIView):
 class SubscriptionPlanListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAdminUser]
     serializer_class = AdminSubscriptionPlanSerializer
-    queryset = SubscriptionPlan.objects.all().order_by('price')
+    queryset = SubscriptionPlan.objects.all().order_by('price_kes')
 
 class SubscriptionPlanRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAdminUser]
