@@ -94,10 +94,11 @@ def log_booking_save(sender, instance, created, **kwargs):
     details = {
         'hostel_name': instance.hostel.name if instance.hostel else None,
         'student_email': instance.student.email if instance.student else None,
-        'check_in': str(instance.check_in),
-        'check_out': str(instance.check_out),
+        'move_in_date': str(instance.move_in_date) if instance.move_in_date else None,
+        'guests': instance.guests,
         'status': instance.status,
-        'total_price': float(instance.total_price) if hasattr(instance, 'total_price') else None,
+        'special_requests': instance.special_requests,
+        'total_price': float(instance.total_amount) if hasattr(instance, 'total_amount') else None,
     }
     
     AuditLog.objects.create(
@@ -106,8 +107,8 @@ def log_booking_save(sender, instance, created, **kwargs):
         action_category='booking',
         resource_type='Booking',
         resource_id=str(instance.id),
-        ip_address=get_default_ip(),  # FIXED: Added default IP
-        user_agent='System Signal',   # FIXED: Added default user agent
+        ip_address='0.0.0.0',  # Add default IP for signal
+        user_agent='System Signal',
         details=details,
     )
 
