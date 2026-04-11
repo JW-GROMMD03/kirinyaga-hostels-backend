@@ -144,7 +144,7 @@ class MpesaCallbackView(APIView):
                 AuditLog.objects.create(
                     user=subscription.owner,
                     action='SUBSCRIPTION_PAYMENT_SUCCESS',
-                    ip_address='M-PESA-CALLBACK',
+                    ip_address='0.0.0.0',
                     user_agent='Safaricom',
                     details={
                         'subscription_id': str(subscription.id),
