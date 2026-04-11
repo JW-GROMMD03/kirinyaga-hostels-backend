@@ -110,7 +110,7 @@ class MpesaCallbackView(APIView):
                 transaction_obj.completed_at = timezone.now()
                 transaction_obj.save()
                 
-                # Activate subscription
+                # ✅ ACTIVATE SUBSCRIPTION FIRST (before any AuditLog that might fail)
                 with transaction.atomic():
                     # Deactivate any existing active subscriptions for this owner
                     OwnerSubscription.objects.filter(
@@ -128,33 +128,39 @@ class MpesaCallbackView(APIView):
                     )
                     subscription.save()
                 
-                # Log activation
-                SubscriptionLog.objects.create(
-                    subscription=subscription,
-                    action='activated',
-                    details={
-                        'mpesa_receipt': mpesa_receipt,
-                        'amount': amount_paid,
-                        'phone': phone_number
-                    },
-                    performed_by=subscription.owner
-                )
-                
-                # Create audit log
-                AuditLog.objects.create(
-                    user=subscription.owner,
-                    action='SUBSCRIPTION_PAYMENT_SUCCESS',
-                    ip_address='0.0.0.0',
-                    user_agent='Safaricom',
-                    details={
-                        'subscription_id': str(subscription.id),
-                        'plan': subscription.plan.display_name,
-                        'amount': amount_paid,
-                        'mpesa_receipt': mpesa_receipt
-                    }
-                )
-                
                 logger.info(f"✅ Subscription {subscription.id} activated successfully!")
+                
+                # Log activation (non-critical - wrapped in try/except)
+                try:
+                    SubscriptionLog.objects.create(
+                        subscription=subscription,
+                        action='activated',
+                        details={
+                            'mpesa_receipt': mpesa_receipt,
+                            'amount': amount_paid,
+                            'phone': phone_number
+                        },
+                        performed_by=subscription.owner
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ SubscriptionLog creation failed (non-critical): {e}")
+                
+                # Create audit log (non-critical - wrapped in try/except)
+                try:
+                    AuditLog.objects.create(
+                        user=subscription.owner,
+                        action='SUBSCRIPTION_PAYMENT_SUCCESS',
+                        ip_address='0.0.0.0',  # ✅ Fixed: Valid IP format
+                        user_agent='Safaricom',
+                        details={
+                            'subscription_id': str(subscription.id),
+                            'plan': subscription.plan.display_name,
+                            'amount': amount_paid,
+                            'mpesa_receipt': mpesa_receipt
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ AuditLog creation failed (non-critical): {e}")
                 
             else:
                 # ============================================
@@ -167,29 +173,39 @@ class MpesaCallbackView(APIView):
                 transaction_obj.response_description = result_desc
                 transaction_obj.save()
                 
-                # Log failure
-                SubscriptionLog.objects.create(
-                    subscription=subscription,
-                    action='payment_failed',
-                    details={
-                        'result_code': result_code,
-                        'result_desc': result_desc
-                    },
-                    performed_by=subscription.owner
-                )
+                # Update subscription status
+                subscription.payment_status = 'failed'
+                subscription.save()
                 
-                # Create audit log
-                AuditLog.objects.create(
-                    user=subscription.owner,
-                    action='SUBSCRIPTION_PAYMENT_FAILED',
-                    ip_address='M-PESA-CALLBACK',
-                    user_agent='Safaricom',
-                    details={
-                        'subscription_id': str(subscription.id),
-                        'plan': subscription.plan.display_name,
-                        'reason': result_desc
-                    }
-                )
+                # Log failure (non-critical - wrapped in try/except)
+                try:
+                    SubscriptionLog.objects.create(
+                        subscription=subscription,
+                        action='payment_failed',
+                        details={
+                            'result_code': result_code,
+                            'result_desc': result_desc
+                        },
+                        performed_by=subscription.owner
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ SubscriptionLog creation failed (non-critical): {e}")
+                
+                # Create audit log (non-critical - wrapped in try/except)
+                try:
+                    AuditLog.objects.create(
+                        user=subscription.owner,
+                        action='SUBSCRIPTION_PAYMENT_FAILED',
+                        ip_address='0.0.0.0',  # ✅ Fixed: Valid IP format
+                        user_agent='Safaricom',
+                        details={
+                            'subscription_id': str(subscription.id),
+                            'plan': subscription.plan.display_name,
+                            'reason': result_desc
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ AuditLog creation failed (non-critical): {e}")
             
             # Always return success to Safaricom
             return Response({
@@ -279,12 +295,21 @@ class CreateSubscriptionView(APIView):
         ).first()
         
         if existing_subscription and not existing_subscription.is_expired():
-            # Handle upgrade
+            # Handle upgrade - allow if new plan is more expensive
             if existing_subscription.plan.price_kes >= plan.price_kes:
                 return Response({
                     'error': f'You already have an active {existing_subscription.plan.display_name} plan. '
                              f'You can only upgrade to higher tiers.'
                 }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # ✅ IMPORTANT: Deactivate old subscription immediately when upgrading
+        if existing_subscription and existing_subscription.plan.price_kes < plan.price_kes:
+            logger.info(f"📱 Upgrading from {existing_subscription.plan.display_name} to {plan.display_name}")
+            # Don't deactivate yet - wait for payment confirmation
+            # Just mark that this is an upgrade
+            is_upgrade = True
+        else:
+            is_upgrade = False
         
         # Create new subscription (pending payment)
         new_subscription = OwnerSubscription.objects.create(
@@ -304,7 +329,7 @@ class CreateSubscriptionView(APIView):
             subscription=new_subscription,
             action='created',
             new_plan=plan.name,
-            details={'price': str(plan.price_kes)},
+            details={'price': str(plan.price_kes), 'is_upgrade': is_upgrade},
             performed_by=request.user
         )
         
@@ -334,7 +359,7 @@ class CreateSubscriptionView(APIView):
             payment_result = initiate_mpesa_payment(request.user, plan, formatted_phone)
             
             if payment_result['success']:
-                # ✅ FIXED: Removed merchant_request_id
+                # Create payment transaction
                 PaymentTransaction.objects.create(
                     subscription=new_subscription,
                     amount=plan.price_kes,
@@ -427,13 +452,16 @@ class CancelSubscriptionView(APIView):
         )
         
         # Audit log
-        AuditLog.objects.create(
-            user=request.user,
-            action='CANCEL_SUBSCRIPTION',
-            ip_address=get_client_ip(request),
-            user_agent=request.META.get('HTTP_USER_AGENT', ''),
-            details={'subscription_id': str(subscription.id), 'plan': subscription.plan.display_name if subscription.plan else 'None'}
-        )
+        try:
+            AuditLog.objects.create(
+                user=request.user,
+                action='CANCEL_SUBSCRIPTION',
+                ip_address=get_client_ip(request) or '0.0.0.0',
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                details={'subscription_id': str(subscription.id), 'plan': subscription.plan.display_name if subscription.plan else 'None'}
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ AuditLog creation failed: {e}")
         
         return Response({
             'status': 'success',
@@ -559,13 +587,16 @@ class AdminManualActivateSubscriptionView(APIView):
         )
         
         # Audit log
-        AuditLog.objects.create(
-            user=request.user,
-            action='MANUAL_SUBSCRIPTION_ACTIVATION',
-            ip_address=get_client_ip(request),
-            user_agent=request.META.get('HTTP_USER_AGENT', ''),
-            details={'owner': owner_email, 'plan': plan.display_name, 'duration': duration_days}
-        )
+        try:
+            AuditLog.objects.create(
+                user=request.user,
+                action='MANUAL_SUBSCRIPTION_ACTIVATION',
+                ip_address=get_client_ip(request) or '0.0.0.0',
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                details={'owner': owner_email, 'plan': plan.display_name, 'duration': duration_days}
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ AuditLog creation failed: {e}")
         
         return Response({
             'status': 'success',
