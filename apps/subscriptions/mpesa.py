@@ -4,9 +4,9 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils import timezone
+from django.conf import settings
 from .models import OwnerSubscription, SubscriptionPlan, PaymentTransaction, SubscriptionLog
 from .utils import stk_push, check_transaction_status
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +120,11 @@ def initiate_mpesa_payment(owner, plan, phone_number):
     # Generate unique transaction ID
     checkout_request_id = str(uuid.uuid4())
     
-    # Create callback URL
-    callback_url = f"{settings.MPESA_CALLBACK_URL}/api/subscriptions/mpesa/callback/"
+    # Get callback URL from settings with fallback
+    callback_url = getattr(settings, 'MPESA_CALLBACK_URL', 'https://kirinyaga-hostels-backend.onrender.com')
+    callback_url = f"{callback_url}/api/subscriptions/mpesa/callback/"
+    
+    logger.info(f"Initiating M-Pesa payment: phone={formatted_phone}, amount={plan.price_kes}, callback={callback_url}")
     
     # Initiate STK Push
     result = stk_push(
@@ -135,8 +138,6 @@ def initiate_mpesa_payment(owner, plan, phone_number):
     if result and result.get('ResponseCode') == '0':
         actual_checkout_id = result.get('CheckoutRequestID')
         
-        # Note: PaymentTransaction will be created in the view with subscription reference
-        # This function just returns the result, the view creates the transaction
         return {
             'success': True,
             'checkout_request_id': actual_checkout_id,

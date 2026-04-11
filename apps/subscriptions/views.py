@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Sum, Count
+from django.conf import settings
 from .models import SubscriptionPlan, OwnerSubscription, PaymentTransaction, SubscriptionLog
 from .serializers import (
     SubscriptionPlanSerializer, OwnerSubscriptionSerializer, 
@@ -12,13 +13,203 @@ from .serializers import (
     AdminManualSubscriptionSerializer, PaymentTransactionSerializer
 )
 from .utils import get_owner_subscription_status, check_hostel_creation_eligibility, check_analytics_access
-from .mpesa import initiate_mpesa_payment
+from .mpesa import initiate_mpesa_payment, process_mpesa_callback
 from apps.accounts.models import User, AuditLog
 from apps.accounts.views_admin import get_client_ip
 
 import logging
 logger = logging.getLogger(__name__)
 
+
+# ============================================
+# PUBLIC CALLBACK ENDPOINT (NO AUTH REQUIRED)
+# ============================================
+
+class MpesaCallbackView(APIView):
+    """
+    Handle M-Pesa STK Push callback from Safaricom.
+    This endpoint is PUBLIC - no authentication required.
+    """
+    permission_classes = []
+    authentication_classes = []
+    
+    def post(self, request):
+        """
+        Process the callback from Safaricom after payment is completed.
+        """
+        logger.info("=" * 50)
+        logger.info("📱 M-PESA CALLBACK RECEIVED")
+        logger.info(f"📱 Request Data: {request.data}")
+        logger.info("=" * 50)
+        
+        try:
+            # Extract callback data
+            body = request.data.get('Body', {})
+            stk_callback = body.get('stkCallback', {})
+            
+            merchant_request_id = stk_callback.get('MerchantRequestID')
+            checkout_request_id = stk_callback.get('CheckoutRequestID')
+            result_code = stk_callback.get('ResultCode')
+            result_desc = stk_callback.get('ResultDesc', '')
+            
+            logger.info(f"📱 CheckoutRequestID: {checkout_request_id}")
+            logger.info(f"📱 ResultCode: {result_code}")
+            logger.info(f"📱 ResultDesc: {result_desc}")
+            
+            # Find the payment transaction
+            try:
+                transaction_obj = PaymentTransaction.objects.get(
+                    transaction_id=checkout_request_id
+                )
+            except PaymentTransaction.DoesNotExist:
+                logger.error(f"❌ Transaction not found for CheckoutRequestID: {checkout_request_id}")
+                # Still return success to Safaricom (prevents retries)
+                return Response({
+                    "ResultCode": 0,
+                    "ResultDesc": "Transaction not found, but acknowledged"
+                })
+            
+            subscription = transaction_obj.subscription
+            
+            if result_code == 0:
+                # ============================================
+                # PAYMENT SUCCESSFUL
+                # ============================================
+                logger.info("✅ Payment SUCCESSFUL!")
+                
+                # Extract metadata
+                callback_metadata = stk_callback.get('CallbackMetadata', {})
+                items = callback_metadata.get('Item', [])
+                
+                mpesa_receipt = ''
+                amount_paid = 0
+                phone_number = ''
+                transaction_date = ''
+                
+                for item in items:
+                    name = item.get('Name', '')
+                    value = item.get('Value', '')
+                    
+                    if name == 'MpesaReceiptNumber':
+                        mpesa_receipt = value
+                    elif name == 'Amount':
+                        amount_paid = float(value) if value else 0
+                    elif name == 'PhoneNumber':
+                        phone_number = value
+                    elif name == 'TransactionDate':
+                        transaction_date = value
+                
+                logger.info(f"📱 M-Pesa Receipt: {mpesa_receipt}")
+                logger.info(f"📱 Amount Paid: {amount_paid}")
+                logger.info(f"📱 Phone: {phone_number}")
+                
+                # Update transaction
+                transaction_obj.status = 'completed'
+                transaction_obj.mpesa_receipt = mpesa_receipt
+                transaction_obj.callback_data = stk_callback
+                transaction_obj.completed_at = timezone.now()
+                transaction_obj.save()
+                
+                # Activate subscription
+                with transaction.atomic():
+                    # Deactivate any existing active subscriptions for this owner
+                    OwnerSubscription.objects.filter(
+                        owner=subscription.owner,
+                        is_active=True
+                    ).update(is_active=False)
+                    
+                    # Activate this subscription
+                    subscription.payment_status = 'completed'
+                    subscription.payment_reference = mpesa_receipt
+                    subscription.is_active = True
+                    subscription.start_date = timezone.now()
+                    subscription.end_date = timezone.now() + timezone.timedelta(
+                        days=subscription.plan.duration_days
+                    )
+                    subscription.save()
+                
+                # Log activation
+                SubscriptionLog.objects.create(
+                    subscription=subscription,
+                    action='payment_received',
+                    details={
+                        'mpesa_receipt': mpesa_receipt,
+                        'amount': amount_paid,
+                        'phone': phone_number
+                    },
+                    performed_by=subscription.owner
+                )
+                
+                # Create audit log
+                AuditLog.objects.create(
+                    user=subscription.owner,
+                    action='SUBSCRIPTION_PAYMENT_SUCCESS',
+                    ip_address='M-PESA-CALLBACK',
+                    user_agent='Safaricom',
+                    details={
+                        'subscription_id': str(subscription.id),
+                        'plan': subscription.plan.display_name,
+                        'amount': amount_paid,
+                        'mpesa_receipt': mpesa_receipt
+                    }
+                )
+                
+                logger.info(f"✅ Subscription {subscription.id} activated successfully!")
+                
+            else:
+                # ============================================
+                # PAYMENT FAILED OR CANCELLED
+                # ============================================
+                logger.warning(f"❌ Payment FAILED: {result_desc}")
+                
+                # Update transaction
+                transaction_obj.status = 'failed'
+                transaction_obj.failure_reason = result_desc
+                transaction_obj.callback_data = stk_callback
+                transaction_obj.save()
+                
+                # Log failure
+                SubscriptionLog.objects.create(
+                    subscription=subscription,
+                    action='payment_failed',
+                    details={
+                        'result_code': result_code,
+                        'result_desc': result_desc
+                    },
+                    performed_by=subscription.owner
+                )
+                
+                # Create audit log
+                AuditLog.objects.create(
+                    user=subscription.owner,
+                    action='SUBSCRIPTION_PAYMENT_FAILED',
+                    ip_address='M-PESA-CALLBACK',
+                    user_agent='Safaricom',
+                    details={
+                        'subscription_id': str(subscription.id),
+                        'plan': subscription.plan.display_name,
+                        'reason': result_desc
+                    }
+                )
+            
+            # Always return success to Safaricom
+            return Response({
+                "ResultCode": 0,
+                "ResultDesc": "Callback processed successfully"
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing callback: {str(e)}", exc_info=True)
+            # Still return success to prevent Safaricom retries
+            return Response({
+                "ResultCode": 0,
+                "ResultDesc": "Error but acknowledged"
+            })
+
+
+# ============================================
+# USER-FACING VIEWS
+# ============================================
 
 class SubscriptionPlanListView(generics.ListAPIView):
     """List all available subscription plans"""
@@ -134,6 +325,13 @@ class CreateSubscriptionView(APIView):
             elif formatted_phone.startswith('+'):
                 formatted_phone = formatted_phone[1:]
             
+            # ============================================
+            # SANDBOX OVERRIDE: Use test phone number
+            # ============================================
+            if settings.MPESA_ENVIRONMENT == 'sandbox':
+                logger.info(f"📱 Sandbox mode: Using test phone 254708374149 instead of {formatted_phone}")
+                formatted_phone = '254708374149'
+            
             payment_result = initiate_mpesa_payment(request.user, plan, formatted_phone)
             
             if payment_result['success']:
@@ -143,6 +341,7 @@ class CreateSubscriptionView(APIView):
                     amount=plan.price_kes,
                     payment_method='mpesa',
                     transaction_id=payment_result.get('checkout_request_id', ''),
+                    merchant_request_id=payment_result.get('merchant_request_id', ''),
                     phone_number=formatted_phone,
                     status='pending'
                 )
