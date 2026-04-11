@@ -477,3 +477,16 @@ if DEBUG:
     print(f"🔒 Admin IP Whitelist: ALLOW ALL (development mode)")
 else:
     print(f"🔒 Admin IP Whitelist: {ADMIN_ALLOWED_IPS if ADMIN_ALLOWED_IPS else 'ALLOW ALL (no restrictions)'}")
+
+# ============================================
+# M-PESA CONFIGURATION (ADD THIS SECTION)
+# ============================================
+MPESA_CONSUMER_KEY = os.getenv('MPESA_CONSUMER_KEY')
+MPESA_CONSUMER_SECRET = os.getenv('MPESA_CONSUMER_SECRET')
+MPESA_PASSKEY = os.getenv('MPESA_PASSKEY')
+MPESA_SHORTCODE = os.getenv('MPESA_SHORTCODE')
+MPESA_ENVIRONMENT = os.getenv('MPESA_ENVIRONMENT', 'sandbox')
+MPESA_CALLBACK_URL = os.getenv('MPESA_CALLBACK_URL', 'https://kirinyaga-hostels-backend.onrender.com')
+
+print(f"📱 M-Pesa Environment: {MPESA_ENVIRONMENT}")
+print(f"📱 M-Pesa Callback URL: {MPESA_CALLBACK_URL}")
