@@ -13,7 +13,7 @@ from .serializers import (
     AdminManualSubscriptionSerializer, PaymentTransactionSerializer
 )
 from .utils import get_owner_subscription_status, check_hostel_creation_eligibility, check_analytics_access
-from .mpesa import initiate_mpesa_payment, process_mpesa_callback
+from .mpesa import initiate_mpesa_payment
 from apps.accounts.models import User, AuditLog
 from apps.accounts.views_admin import get_client_ip
 
@@ -106,7 +106,7 @@ class MpesaCallbackView(APIView):
                 # Update transaction
                 transaction_obj.status = 'completed'
                 transaction_obj.mpesa_receipt = mpesa_receipt
-                transaction_obj.callback_data = stk_callback
+                transaction_obj.response_description = result_desc
                 transaction_obj.completed_at = timezone.now()
                 transaction_obj.save()
                 
@@ -131,7 +131,7 @@ class MpesaCallbackView(APIView):
                 # Log activation
                 SubscriptionLog.objects.create(
                     subscription=subscription,
-                    action='payment_received',
+                    action='activated',
                     details={
                         'mpesa_receipt': mpesa_receipt,
                         'amount': amount_paid,
@@ -164,8 +164,7 @@ class MpesaCallbackView(APIView):
                 
                 # Update transaction
                 transaction_obj.status = 'failed'
-                transaction_obj.failure_reason = result_desc
-                transaction_obj.callback_data = stk_callback
+                transaction_obj.response_description = result_desc
                 transaction_obj.save()
                 
                 # Log failure
@@ -335,13 +334,12 @@ class CreateSubscriptionView(APIView):
             payment_result = initiate_mpesa_payment(request.user, plan, formatted_phone)
             
             if payment_result['success']:
-                # Create payment transaction with the subscription reference
+                # ✅ FIXED: Removed merchant_request_id
                 PaymentTransaction.objects.create(
                     subscription=new_subscription,
                     amount=plan.price_kes,
                     payment_method='mpesa',
                     transaction_id=payment_result.get('checkout_request_id', ''),
-                    merchant_request_id=payment_result.get('merchant_request_id', ''),
                     phone_number=formatted_phone,
                     status='pending'
                 )

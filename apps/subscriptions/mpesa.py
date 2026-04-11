@@ -31,7 +31,7 @@ def mpesa_callback(request):
             transaction = PaymentTransaction.objects.get(transaction_id=checkout_request_id)
         except PaymentTransaction.DoesNotExist:
             logger.error(f"Transaction not found: {checkout_request_id}")
-            return JsonResponse({'ResultCode': 1, 'ResultDesc': 'Transaction not found'})
+            return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Transaction not found, but acknowledged'})
         
         if result_code == 0:  # Success
             # Get callback metadata
@@ -60,7 +60,13 @@ def mpesa_callback(request):
             # Get the subscription from the transaction
             subscription = transaction.subscription
             if subscription:
-                # Activate the subscription
+                # Deactivate any existing active subscriptions for this owner
+                OwnerSubscription.objects.filter(
+                    owner=subscription.owner,
+                    is_active=True
+                ).update(is_active=False)
+                
+                # Activate this subscription
                 subscription.payment_status = 'completed'
                 subscription.payment_reference = mpesa_receipt
                 subscription.mpesa_receipt_number = mpesa_receipt
@@ -82,7 +88,7 @@ def mpesa_callback(request):
                     performed_by=subscription.owner
                 )
                 
-                logger.info(f"Subscription activated for {subscription.owner.email}")
+                logger.info(f"✅ Subscription activated for {subscription.owner.email}")
             else:
                 logger.error(f"No subscription found for transaction: {checkout_request_id}")
             
@@ -96,18 +102,17 @@ def mpesa_callback(request):
                 subscription.payment_status = 'failed'
                 subscription.save()
                 
-                logger.error(f"Payment failed for {subscription.owner.email}: {result_desc}")
+                logger.error(f"❌ Payment failed for {subscription.owner.email}: {result_desc}")
         
         return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Success'})
         
     except Exception as e:
         logger.error(f"Error processing M-Pesa callback: {e}")
-        return JsonResponse({'ResultCode': 1, 'ResultDesc': str(e)})
+        return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Error but acknowledged'})
 
 
 def initiate_mpesa_payment(owner, plan, phone_number):
     """Initiate M-Pesa payment for subscription"""
-    from .models import PaymentTransaction
     import uuid
     
     # Format phone number
@@ -117,37 +122,40 @@ def initiate_mpesa_payment(owner, plan, phone_number):
     elif formatted_phone.startswith('+'):
         formatted_phone = formatted_phone[1:]
     
-    # Generate unique transaction ID
-    checkout_request_id = str(uuid.uuid4())
+    # Generate unique transaction ID (fallback if STK push doesn't return one)
+    fallback_checkout_id = str(uuid.uuid4())
     
-    # Get callback URL from settings with fallback
-    callback_url = getattr(settings, 'MPESA_CALLBACK_URL', 'https://kirinyaga-hostels-backend.onrender.com')
-    callback_url = f"{callback_url}/api/subscriptions/mpesa/callback/"
+    # ✅ FIXED: Use the callback URL directly from settings - DO NOT APPEND ANYTHING
+    callback_url = getattr(settings, 'MPESA_CALLBACK_URL', 'https://kirinyaga-hostels-backend.onrender.com/api/subscriptions/mpesa/callback/')
     
-    logger.info(f"Initiating M-Pesa payment: phone={formatted_phone}, amount={plan.price_kes}, callback={callback_url}")
+    logger.info(f"📱 Initiating M-Pesa payment: phone={formatted_phone}, amount={plan.price_kes}, callback={callback_url}")
     
     # Initiate STK Push
     result = stk_push(
         phone_number=formatted_phone,
         amount=int(plan.price_kes),
-        account_reference=checkout_request_id[:12],
-        transaction_desc=f"Subs: {plan.display_name}",
+        account_reference=f"SUB{owner.id}"[:12],
+        transaction_desc=f"Subs:{plan.display_name[:13]}",
         callback_url=callback_url
     )
     
     if result and result.get('ResponseCode') == '0':
-        actual_checkout_id = result.get('CheckoutRequestID')
+        actual_checkout_id = result.get('CheckoutRequestID', fallback_checkout_id)
         
         return {
             'success': True,
             'checkout_request_id': actual_checkout_id,
+            'merchant_request_id': result.get('MerchantRequestID', ''),
             'message': 'STK Push sent. Please check your phone and enter PIN.'
         }
     else:
+        error_msg = result.get('ResponseDescription', 'Payment initiation failed') if result else 'Payment service unavailable'
+        logger.error(f"❌ M-Pesa payment failed: {error_msg}")
         return {
             'success': False,
-            'message': result.get('ResponseDescription', 'Payment initiation failed') if result else 'Payment service unavailable'
+            'message': error_msg
         }
+
 
 def process_mpesa_callback(callback_data):
     """
