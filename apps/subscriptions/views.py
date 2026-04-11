@@ -4,13 +4,14 @@ from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Sum, Count
 from .models import SubscriptionPlan, OwnerSubscription, PaymentTransaction, SubscriptionLog
 from .serializers import (
     SubscriptionPlanSerializer, OwnerSubscriptionSerializer, 
     CreateSubscriptionSerializer, MpesaSTKPushSerializer,
     AdminManualSubscriptionSerializer, PaymentTransactionSerializer
 )
-from .utils import get_owner_subscription_status, check_hostel_creation_eligibility
+from .utils import get_owner_subscription_status, check_hostel_creation_eligibility, check_analytics_access
 from .mpesa import initiate_mpesa_payment
 from apps.accounts.models import User, AuditLog
 from apps.accounts.views_admin import get_client_ip
@@ -33,6 +34,24 @@ class CurrentSubscriptionView(APIView):
     def get(self, request):
         status_data = get_owner_subscription_status(request.user)
         return Response(status_data)
+
+
+class CheckAnalyticsAccessView(APIView):
+    """Check if owner has access to analytics"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request):
+        if request.user.role != 'owner':
+            return Response({'error': 'Only owners can access analytics'}, status=status.HTTP_403_FORBIDDEN)
+        
+        can_access, message = check_analytics_access(request.user)
+        status_data = get_owner_subscription_status(request.user)
+        
+        return Response({
+            'can_access': can_access,
+            'message': message,
+            'subscription_status': status_data
+        })
 
 
 class CreateSubscriptionView(APIView):
@@ -102,21 +121,29 @@ class CreateSubscriptionView(APIView):
         # Initiate payment based on method
         if payment_method == 'mpesa':
             if not phone_number:
+                # Delete the subscription since payment can't be initiated
+                new_subscription.delete()
                 return Response({
                     'error': 'Phone number is required for M-Pesa payment'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
-            payment_result = initiate_mpesa_payment(request.user, plan, phone_number)
+            # Format phone number
+            formatted_phone = phone_number
+            if formatted_phone.startswith('0'):
+                formatted_phone = '254' + formatted_phone[1:]
+            elif formatted_phone.startswith('+'):
+                formatted_phone = formatted_phone[1:]
+            
+            payment_result = initiate_mpesa_payment(request.user, plan, formatted_phone)
             
             if payment_result['success']:
-                # Create payment transaction
-                from .models import PaymentTransaction
+                # Create payment transaction with the subscription reference
                 PaymentTransaction.objects.create(
                     subscription=new_subscription,
                     amount=plan.price_kes,
                     payment_method='mpesa',
                     transaction_id=payment_result.get('checkout_request_id', ''),
-                    phone_number=phone_number,
+                    phone_number=formatted_phone,
                     status='pending'
                 )
                 
@@ -126,8 +153,8 @@ class CreateSubscriptionView(APIView):
                     'message': 'Payment initiated. Please check your phone for the STK push.'
                 }, status=status.HTTP_200_OK)
             else:
-                new_subscription.payment_status = 'failed'
-                new_subscription.save()
+                # Delete the subscription since payment failed
+                new_subscription.delete()
                 return Response({
                     'error': payment_result.get('message', 'Payment initiation failed')
                 }, status=status.HTTP_400_BAD_REQUEST)
@@ -365,16 +392,15 @@ class AdminSubscriptionStatsView(APIView):
         
         # Revenue stats
         total_revenue = OwnerSubscription.objects.filter(payment_status='completed').aggregate(
-            total=models.Sum('amount_paid')
+            total=Sum('amount_paid')
         )['total'] or 0
         
         monthly_revenue = OwnerSubscription.objects.filter(
             payment_status='completed',
             created_at__gte=timezone.now() - timezone.timedelta(days=30)
-        ).aggregate(total=models.Sum('amount_paid'))['total'] or 0
+        ).aggregate(total=Sum('amount_paid'))['total'] or 0
         
         # Plan distribution
-        from django.db.models import Count
         plan_distribution = OwnerSubscription.objects.filter(
             is_active=True
         ).values('plan__display_name').annotate(count=Count('id'))
@@ -387,21 +413,4 @@ class AdminSubscriptionStatsView(APIView):
             'total_revenue': float(total_revenue),
             'monthly_revenue': float(monthly_revenue),
             'plan_distribution': list(plan_distribution)
-        })
-
-class CheckAnalyticsAccessView(APIView):
-    """Check if owner has access to analytics"""
-    permission_classes = [permissions.IsAuthenticated]
-    
-    def get(self, request):
-        if request.user.role != 'owner':
-            return Response({'error': 'Only owners can access analytics'}, status=status.HTTP_403_FORBIDDEN)
-        
-        can_access, message = check_analytics_access(request.user)
-        status_data = get_owner_subscription_status(request.user)
-        
-        return Response({
-            'can_access': can_access,
-            'message': message,
-            'subscription_status': status_data
         })

@@ -57,30 +57,34 @@ def mpesa_callback(request):
             transaction.response_description = result_desc
             transaction.save()
             
-            # Activate subscription
+            # Get the subscription from the transaction
             subscription = transaction.subscription
-            subscription.payment_status = 'completed'
-            subscription.payment_reference = mpesa_receipt
-            subscription.mpesa_receipt_number = mpesa_receipt
-            subscription.amount_paid = amount
-            subscription.is_active = True
-            subscription.start_date = timezone.now()
-            
-            # Set end date based on plan duration
-            if subscription.plan:
-                subscription.end_date = timezone.now() + timezone.timedelta(days=subscription.plan.duration_days)
-            
-            subscription.save()
-            
-            # Log the activation
-            SubscriptionLog.objects.create(
-                subscription=subscription,
-                action='activated',
-                details={'mpesa_receipt': mpesa_receipt, 'amount': amount},
-                performed_by=subscription.owner
-            )
-            
-            logger.info(f"Subscription activated for {subscription.owner.email}")
+            if subscription:
+                # Activate the subscription
+                subscription.payment_status = 'completed'
+                subscription.payment_reference = mpesa_receipt
+                subscription.mpesa_receipt_number = mpesa_receipt
+                subscription.amount_paid = amount or transaction.amount
+                subscription.is_active = True
+                subscription.start_date = timezone.now()
+                
+                # Set end date based on plan duration
+                if subscription.plan:
+                    subscription.end_date = timezone.now() + timezone.timedelta(days=subscription.plan.duration_days)
+                
+                subscription.save()
+                
+                # Log the activation
+                SubscriptionLog.objects.create(
+                    subscription=subscription,
+                    action='activated',
+                    details={'mpesa_receipt': mpesa_receipt, 'amount': amount},
+                    performed_by=subscription.owner
+                )
+                
+                logger.info(f"Subscription activated for {subscription.owner.email}")
+            else:
+                logger.error(f"No subscription found for transaction: {checkout_request_id}")
             
         else:  # Failed
             transaction.status = 'failed'
@@ -88,10 +92,11 @@ def mpesa_callback(request):
             transaction.save()
             
             subscription = transaction.subscription
-            subscription.payment_status = 'failed'
-            subscription.save()
-            
-            logger.error(f"Payment failed for {subscription.owner.email}: {result_desc}")
+            if subscription:
+                subscription.payment_status = 'failed'
+                subscription.save()
+                
+                logger.error(f"Payment failed for {subscription.owner.email}: {result_desc}")
         
         return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Success'})
         
@@ -103,46 +108,41 @@ def mpesa_callback(request):
 def initiate_mpesa_payment(owner, plan, phone_number):
     """Initiate M-Pesa payment for subscription"""
     from .models import PaymentTransaction
+    import uuid
+    
+    # Format phone number
+    formatted_phone = phone_number
+    if formatted_phone.startswith('0'):
+        formatted_phone = '254' + formatted_phone[1:]
+    elif formatted_phone.startswith('+'):
+        formatted_phone = formatted_phone[1:]
     
     # Generate unique transaction ID
-    import uuid
-    transaction_id = str(uuid.uuid4())
-    
-    # Create transaction record
-    transaction = PaymentTransaction.objects.create(
-        subscription=None,  # Will be updated after subscription creation
-        amount=float(plan.price_kes),
-        payment_method='mpesa',
-        transaction_id=transaction_id,
-        phone_number=phone_number,
-        status='pending'
-    )
+    checkout_request_id = str(uuid.uuid4())
     
     # Create callback URL
     callback_url = f"{settings.MPESA_CALLBACK_URL}/api/subscriptions/mpesa/callback/"
     
     # Initiate STK Push
     result = stk_push(
-        phone_number=phone_number,
+        phone_number=formatted_phone,
         amount=int(plan.price_kes),
-        account_reference=transaction_id[:12],
+        account_reference=checkout_request_id[:12],
         transaction_desc=f"Subs: {plan.display_name}",
         callback_url=callback_url
     )
     
     if result and result.get('ResponseCode') == '0':
-        checkout_request_id = result.get('CheckoutRequestID')
-        transaction.transaction_id = checkout_request_id
-        transaction.save()
+        actual_checkout_id = result.get('CheckoutRequestID')
         
+        # Note: PaymentTransaction will be created in the view with subscription reference
+        # This function just returns the result, the view creates the transaction
         return {
             'success': True,
-            'checkout_request_id': checkout_request_id,
+            'checkout_request_id': actual_checkout_id,
             'message': 'STK Push sent. Please check your phone and enter PIN.'
         }
     else:
-        transaction.status = 'failed'
-        transaction.save()
         return {
             'success': False,
             'message': result.get('ResponseDescription', 'Payment initiation failed') if result else 'Payment service unavailable'
