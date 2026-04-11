@@ -148,3 +148,10 @@ def initiate_mpesa_payment(owner, plan, phone_number):
             'success': False,
             'message': result.get('ResponseDescription', 'Payment initiation failed') if result else 'Payment service unavailable'
         }
+
+def process_mpesa_callback(callback_data):
+    """
+    Process M-Pesa callback data.
+    This is a placeholder - the actual processing happens in the view.
+    """
+    return callback_data
