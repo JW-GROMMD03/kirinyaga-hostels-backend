@@ -23,4 +23,8 @@ urlpatterns = [
     path('owner/<uuid:pk>/', views.OwnerBookingDetailView.as_view(), name='owner-booking-detail'),
     path('owner/<uuid:pk>/update-status/', views.UpdateBookingStatusView.as_view(), name='update-booking-status'),
     path('owner-stats/', views.OwnerBookingStatsView.as_view(), name='owner-booking-stats'),
+
+     # Hostel management
+    path('hostel/<uuid:hostel_id>/mark-taken/', views.MarkHostelAsTakenView.as_view(), name='mark-hostel-taken'),
+    path('hostel/<uuid:hostel_id>/mark-available/', views.MarkHostelAsAvailableView.as_view(), name='mark-hostel-available'),
 ]

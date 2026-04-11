@@ -77,7 +77,45 @@ class BookingCreateView(generics.CreateAPIView):
     def perform_create(self, serializer):
         if self.request.user.role != 'student':
             raise permissions.PermissionDenied("Only students can create bookings")
-        serializer.save(student=self.request.user, expires_at=timezone.now() + timedelta(hours=1))
+        
+        # Check for existing active booking
+        hostel = serializer.validated_data.get('hostel')
+        existing_booking = Booking.objects.filter(
+            student=self.request.user,
+            hostel=hostel,
+            status__in=['pending', 'confirmed']
+        ).first()
+        
+        if existing_booking:
+            raise serializers.ValidationError({
+                'error': 'You have already booked this hostel. You cannot book it again.',
+                'existing_booking_id': str(existing_booking.id),
+                'status': existing_booking.status
+            })
+        
+        # Check if hostel is available
+        if not hostel.available:
+            raise serializers.ValidationError('This hostel is no longer available. Please choose another.')
+        
+        # Create booking with 4-hour expiry
+        booking = serializer.save(
+            student=self.request.user,
+            expires_at=timezone.now() + timedelta(hours=4)
+        )
+        
+        # Temporarily mark hostel as unavailable
+        hostel.available = False
+        hostel.save()
+        
+        # Create notification for hostel owner
+        from apps.notifications.models import Notification
+        Notification.objects.create(
+            user=hostel.owner,
+            type='booking',
+            title='New Booking Request',
+            message=f"{self.request.user.full_name} wants to book {hostel.name}. Payment window: 4 hours.",
+            link=f"/owner/bookings.html?id={booking.id}"
+        )
 
 
 class BookingDetailView(generics.RetrieveUpdateAPIView):
@@ -95,7 +133,7 @@ class BookingDetailView(generics.RetrieveUpdateAPIView):
 
 
 class CancelBookingView(APIView):
-    """Cancel a booking"""
+    """Cancel a booking and release the hostel"""
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
@@ -103,11 +141,124 @@ class CancelBookingView(APIView):
             booking = Booking.objects.get(pk=pk)
             if booking.student != request.user and request.user.role != 'admin':
                 return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
             booking.status = 'cancelled'
             booking.save()
-            return Response({'status': 'success'})
+            
+            # Release the hostel back to available
+            if booking.hostel.available is False:
+                other_active = Booking.objects.filter(
+                    hostel=booking.hostel,
+                    status='confirmed'
+                ).exclude(id=booking.id).exists()
+                if not other_active:
+                    booking.hostel.available = True
+                    booking.hostel.save()
+            
+            return Response({'status': 'success', 'message': 'Booking cancelled successfully'})
         except Booking.DoesNotExist:
             return Response({'error': 'Booking not found'}, status=404)
+
+class HostelBookingsView(generics.ListAPIView):
+    """Get all bookings for a specific hostel (admin only)"""
+    serializer_class = BookingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        hostel_id = self.kwargs.get('hostel_id')
+        user = self.request.user
+        if user.role == 'admin' or user.is_superuser:
+            return Booking.objects.filter(hostel_id=hostel_id).order_by('-created_at')
+        return Booking.objects.none()
+    
+class ConfirmPaymentView(APIView):
+    """Confirm payment and mark booking as confirmed"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            booking = Booking.objects.get(pk=pk)
+            
+            # Check if user is owner or admin
+            if booking.hostel.owner != request.user and request.user.role != 'admin':
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
+            booking.status = 'confirmed'
+            booking.deposit_paid = True
+            booking.save()
+            
+            # Hostel is already marked as unavailable from booking creation
+            # No need to change again
+            
+            # Notify student
+            from apps.notifications.models import Notification
+            Notification.objects.create(
+                user=booking.student,
+                type='booking',
+                title='Booking Confirmed',
+                message=f"Your booking for {booking.hostel.name} has been confirmed! Welcome to your new home.",
+                link=f"/student/bookings.html"
+            )
+            
+            return Response({'status': 'success', 'message': 'Booking confirmed and hostel marked as taken'})
+        except Booking.DoesNotExist:
+            return Response({'error': 'Booking not found'}, status=404)
+
+
+class MarkHostelAsTakenView(APIView):
+    """Admin/Owner mark hostel as taken (available=False)"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, hostel_id):
+        try:
+            from apps.hostels.models import Hostel
+            hostel = Hostel.objects.get(id=hostel_id)
+            
+            # Check permission
+            if request.user.role != 'admin' and hostel.owner != request.user:
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
+            hostel.available = False
+            hostel.save()
+            
+            # Cancel any pending bookings for this hostel
+            Booking.objects.filter(hostel=hostel, status='pending').update(status='cancelled')
+            
+            # Audit log
+            from apps.accounts.models import AuditLog
+            from apps.accounts.views_admin import get_client_ip
+            AuditLog.objects.create(
+                user=request.user,
+                action='MARK_HOSTEL_TAKEN',
+                action_category='hostel',
+                ip_address=get_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', '')[:500],
+                details={'hostel_id': str(hostel.id), 'name': hostel.name}
+            )
+            
+            return Response({'status': 'success', 'message': f'Hostel "{hostel.name}" marked as taken'})
+        except Hostel.DoesNotExist:
+            return Response({'error': 'Hostel not found'}, status=404)
+
+
+class MarkHostelAsAvailableView(APIView):
+    """Admin/Owner mark hostel as available (available=True)"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, hostel_id):
+        try:
+            from apps.hostels.models import Hostel
+            hostel = Hostel.objects.get(id=hostel_id)
+            
+            if request.user.role != 'admin' and hostel.owner != request.user:
+                return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+            
+            hostel.available = True
+            hostel.save()
+            
+            return Response({'status': 'success', 'message': f'Hostel "{hostel.name}" marked as available'})
+        except Hostel.DoesNotExist:
+            return Response({'error': 'Hostel not found'}, status=404)
 
 
 class HostelBookingsView(generics.ListAPIView):
@@ -198,7 +349,7 @@ class OwnerBookingDetailView(generics.RetrieveAPIView):
 
 
 class UpdateBookingStatusView(APIView):
-    """Update booking status (confirm/cancel/complete) for owner"""
+    """Update booking status (confirm/cancel) for owner"""
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
@@ -213,7 +364,7 @@ class UpdateBookingStatusView(APIView):
             booking = Booking.objects.get(pk=pk, hostel__owner=request.user)
             new_status = request.data.get('status')
             
-            valid_statuses = ['confirmed', 'cancelled', 'completed']
+            valid_statuses = ['confirmed', 'cancelled']
             if new_status not in valid_statuses:
                 return Response(
                     {'error': f'Invalid status. Must be one of: {", ".join(valid_statuses)}'}, 
@@ -222,6 +373,16 @@ class UpdateBookingStatusView(APIView):
             
             booking.status = new_status
             booking.save()
+            
+            if new_status == 'cancelled':
+                # Release the hostel back to available
+                other_active = Booking.objects.filter(
+                    hostel=booking.hostel,
+                    status='confirmed'
+                ).exclude(id=booking.id).exists()
+                if not other_active:
+                    booking.hostel.available = True
+                    booking.hostel.save()
             
             serializer = BookingSerializer(booking)
             return Response({

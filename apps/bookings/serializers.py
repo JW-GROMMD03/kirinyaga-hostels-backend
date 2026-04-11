@@ -16,6 +16,8 @@ class BookingSerializer(serializers.ModelSerializer):
     check_in = serializers.SerializerMethodField()
     check_out = serializers.SerializerMethodField()
     total_amount = serializers.SerializerMethodField()
+    is_expired = serializers.SerializerMethodField()
+    time_remaining = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -24,7 +26,7 @@ class BookingSerializer(serializers.ModelSerializer):
             'user_email', 'user_name', 'hostel', 'hostel_name', 'hostel_details',
             'move_in_date', 'check_in', 'check_out', 'guests', 'status',
             'special_requests', 'created_at', 'updated_at', 'expires_at',
-            'total_amount'
+            'total_amount', 'deposit_paid', 'deposit_amount', 'is_expired', 'time_remaining'
         ]
         read_only_fields = ['student', 'created_at', 'updated_at']
 
@@ -54,6 +56,18 @@ class BookingSerializer(serializers.ModelSerializer):
             # Calculate total based on hostel price and guests
             return float(obj.hostel.price) * obj.guests
         return 0
+    
+    def get_is_expired(self, obj):
+        return obj.is_expired()
+    
+    def get_time_remaining(self, obj):
+        if obj.expires_at and obj.status == 'pending':
+            remaining = obj.expires_at - timezone.now()
+            if remaining.total_seconds() > 0:
+                hours = remaining.seconds // 3600
+                minutes = (remaining.seconds % 3600) // 60
+                return {'hours': hours, 'minutes': minutes, 'total_seconds': remaining.total_seconds()}
+        return None
 
 
 class BookingCreateSerializer(serializers.ModelSerializer):
@@ -65,6 +79,28 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         if value < timezone.now().date():
             raise serializers.ValidationError("Move‑in date cannot be in the past.")
         return value
+
+    def validate(self, data):
+        # Check for duplicate active booking
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            existing = Booking.objects.filter(
+                student=request.user,
+                hostel=data['hostel'],
+                status__in=['pending', 'confirmed']
+            ).first()
+            if existing:
+                raise serializers.ValidationError({
+                    'existing_booking_id': str(existing.id),
+                    'status': existing.status,
+                    'message': 'You have already booked this hostel. You cannot book it again.'
+                })
+        
+        # Check if hostel is available
+        if not data['hostel'].available:
+            raise serializers.ValidationError('This hostel is no longer available. Please choose another.')
+        
+        return data
 
     def create(self, validated_data):
         validated_data['student'] = self.context['request'].user
