@@ -128,6 +128,43 @@ def check_hostel_creation_eligibility(owner):
     can, message = subscription.can_add_hostel()
     return can, message
 
+def check_image_upload_eligibility(owner, requested_image_count=1):
+    """Check if owner can upload images for a hostel"""
+    from .models import OwnerSubscription
+    
+    try:
+        subscription = OwnerSubscription.objects.filter(owner=owner, is_active=True).latest('created_at')
+    except OwnerSubscription.DoesNotExist:
+        subscription = None
+    
+    # Default max images per hostel is 6
+    max_images_per_hostel = 6
+    
+    if subscription and not subscription.is_expired():
+        max_images_per_hostel = subscription.plan.max_images_per_hostel if subscription.plan else 6
+    
+    if requested_image_count > max_images_per_hostel:
+        return False, f"You can only upload up to {max_images_per_hostel} images per hostel. Your {subscription.plan.display_name if subscription else 'Free'} plan allows {max_images_per_hostel} images."
+    
+    return True, ""
+
+def check_analytics_access(owner):
+    """Check if owner has access to analytics features"""
+    from .models import OwnerSubscription
+    
+    try:
+        subscription = OwnerSubscription.objects.filter(owner=owner, is_active=True).latest('created_at')
+    except OwnerSubscription.DoesNotExist:
+        subscription = None
+    
+    if not subscription or subscription.is_expired():
+        return False, "Analytics access requires an active subscription. Please subscribe to view analytics."
+    
+    if not subscription.plan.analytics_access:
+        return False, f"Your {subscription.plan.display_name} plan does not include analytics access. Upgrade to Premium or Enterprise to access analytics."
+    
+    return True, ""
+
 def get_owner_subscription_status(owner):
     """Get current subscription status for owner"""
     from .models import OwnerSubscription
@@ -141,9 +178,11 @@ def get_owner_subscription_status(owner):
             'expires_at': subscription.end_date,
             'days_remaining': subscription.days_remaining(),
             'max_hostels': subscription.plan.max_hostels if subscription.plan else 1,
+            'max_images_per_hostel': subscription.plan.max_images_per_hostel if subscription.plan else 6,
             'current_hostels': owner.hostels.count(),
-            'can_add_hostel': subscription.can_add_hostel()[0],
+            'can_add_hostel': check_hostel_creation_eligibility(owner)[0],
             'can_feature': subscription.plan.can_feature_listings if subscription.plan else False,
+            'has_analytics_access': subscription.plan.analytics_access if subscription.plan else False,
         }
     except OwnerSubscription.DoesNotExist:
         # Free tier
@@ -157,7 +196,9 @@ def get_owner_subscription_status(owner):
             'expires_at': None,
             'days_remaining': None,
             'max_hostels': 1,
+            'max_images_per_hostel': 6,
             'current_hostels': owner.hostels.count(),
             'can_add_hostel': hostels_this_month < 1,
             'can_feature': False,
+            'has_analytics_access': False,
         }

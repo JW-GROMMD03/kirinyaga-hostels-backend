@@ -388,3 +388,20 @@ class AdminSubscriptionStatsView(APIView):
             'monthly_revenue': float(monthly_revenue),
             'plan_distribution': list(plan_distribution)
         })
+
+class CheckAnalyticsAccessView(APIView):
+    """Check if owner has access to analytics"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request):
+        if request.user.role != 'owner':
+            return Response({'error': 'Only owners can access analytics'}, status=status.HTTP_403_FORBIDDEN)
+        
+        can_access, message = check_analytics_access(request.user)
+        status_data = get_owner_subscription_status(request.user)
+        
+        return Response({
+            'can_access': can_access,
+            'message': message,
+            'subscription_status': status_data
+        })

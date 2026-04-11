@@ -16,4 +16,5 @@ urlpatterns = [
     path('admin/list/', views.AdminSubscriptionListView.as_view(), name='admin-subscriptions'),
     path('admin/activate/', views.AdminManualActivateSubscriptionView.as_view(), name='admin-activate'),
     path('admin/stats/', views.AdminSubscriptionStatsView.as_view(), name='admin-stats'),
+    path('check-analytics/', views.CheckAnalyticsAccessView.as_view(), name='check-analytics'),
 ]
