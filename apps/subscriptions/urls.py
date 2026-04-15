@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import admin_views
 
 urlpatterns = [
     # ============================================
@@ -24,4 +25,9 @@ urlpatterns = [
     path('admin/list/', views.AdminSubscriptionListView.as_view(), name='admin-subscriptions'),
     path('admin/activate/', views.AdminManualActivateSubscriptionView.as_view(), name='admin-activate'),
     path('admin/stats/', views.AdminSubscriptionStatsView.as_view(), name='admin-stats'),
+
+    # Admin subscription management
+    path('admin/all/', admin_views.AdminAllSubscriptionsView.as_view(), name='admin-all-subscriptions'),
+    path('admin/grant-bonus/', admin_views.AdminGrantBonusSubscriptionView.as_view(), name='admin-grant-bonus'),
+    path('admin/revoke/', admin_views.AdminRevokeSubscriptionView.as_view(), name='admin-revoke'),
 ]
