@@ -166,91 +166,84 @@ class DashboardStatsView(APIView):
             
         locked_accounts = User.objects.filter(locked_until__gte=now).count()
         
+
         # ========== FIXED: Recent Activity - LOAD LIVE DATA ==========
         recent_activity = AuditLog.objects.select_related('user').order_by('-timestamp')[:50]
         
         activity_data = []
         for log in recent_activity:
-            # Format action for display with icons
-            action_display = log.action
-            icon = '📌'
+            # Use the new human-readable methods
+            action_display = log.get_human_readable_action()
             
-            if log.action == 'LOGIN_FAILED':
-                icon = '❌'
-                action_display = 'Failed Login Attempt'
-            elif log.action == 'LOGIN_SUCCESS':
-                icon = '✅'
-                action_display = 'Successful Login'
-            elif log.action == 'LOGIN_FAILED_WRONG_PORTAL':
-                icon = '⚠️'
-                action_display = 'Wrong Portal Login Attempt'
-            elif log.action == 'CREATE_HOSTEL':
-                icon = '🏠'
-                action_display = 'Created Hostel'
-            elif log.action == 'UPDATE_HOSTEL':
-                icon = '✏️'
-                action_display = 'Updated Hostel'
-            elif log.action == 'DELETE_HOSTEL':
-                icon = '🗑️'
-                action_display = 'Deleted Hostel'
-            elif log.action == 'VIEW_HOSTEL' or log.action == 'VIEW_HOSTEL_DETAIL':
-                icon = '👁️'
-                action_display = 'Viewed Hostel'
-            elif log.action == 'VIEW_HOSTELS_LIST':
-                icon = '📋'
-                action_display = 'Viewed Hostels List'
-            elif log.action == 'STUDENT_SIGNUP':
-                icon = '📝'
-                action_display = 'Student Registered'
-            elif log.action == 'OWNER_SIGNUP':
-                icon = '📝'
-                action_display = 'Owner Registered'
-            elif log.action == 'TOGGLE_USER_STATUS':
-                icon = '🔒'
-                action_display = 'User Status Changed'
-            elif log.action == 'APPROVE_OWNER':
-                icon = '✓'
-                action_display = 'Owner Approved'
-            elif log.action == 'APPROVE_HOSTEL':
-                icon = '✓'
-                action_display = 'Hostel Approved'
-            elif log.action == 'REJECT_HOSTEL':
-                icon = '✗'
-                action_display = 'Hostel Rejected'
-            elif log.action == 'SAVE_HOSTEL':
+            # Get icon based on action category
+            icon = '📌'
+            if log.action_category == 'auth':
+                if 'LOGIN_SUCCESS' in log.action:
+                    icon = '✅'
+                elif 'LOGIN_FAILED' in log.action:
+                    icon = '❌'
+                elif 'LOGOUT' in log.action:
+                    icon = '🚪'
+                else:
+                    icon = '🔐'
+            elif log.action_category == 'hostel':
+                if 'CREATE' in log.action:
+                    icon = '🏠'
+                elif 'UPDATE' in log.action:
+                    icon = '✏️'
+                elif 'DELETE' in log.action:
+                    icon = '🗑️'
+                elif 'VIEW' in log.action:
+                    icon = '👁️'
+                elif 'APPROVE' in log.action:
+                    icon = '✓'
+                elif 'REJECT' in log.action:
+                    icon = '✗'
+                else:
+                    icon = '🏠'
+            elif log.action_category == 'booking':
+                if 'CREATE' in log.action:
+                    icon = '📅'
+                elif 'CANCEL' in log.action:
+                    icon = '🚫'
+                else:
+                    icon = '📅'
+            elif log.action_category == 'review':
                 icon = '⭐'
-                action_display = 'Saved Hostel'
-            elif log.action == 'UNSAVE_HOSTEL':
-                icon = '☆'
-                action_display = 'Unsaved Hostel'
-            elif log.action == 'CREATE_BOOKING':
-                icon = '📅'
-                action_display = 'Created Booking'
-            elif log.action == 'CANCEL_BOOKING':
-                icon = '🚫'
-                action_display = 'Cancelled Booking'
-            elif log.action == 'CREATE_REVIEW':
-                icon = '⭐'
-                action_display = 'Wrote Review'
-            elif log.action == 'PASSWORD_RESET':
-                icon = '🔑'
-                action_display = 'Password Reset'
-            elif log.action == '2FA_ENABLED':
-                icon = '🔐'
-                action_display = '2FA Enabled'
-            elif log.action == '2FA_DISABLED':
-                icon = '🔓'
-                action_display = '2FA Disabled'
-            elif log.action == 'UPDATE_PROFILE':
+            elif log.action_category == 'profile':
                 icon = '👤'
-                action_display = 'Updated Profile'
+            elif log.action_category == 'payment':
+                if 'SUCCESS' in log.action:
+                    icon = '💰'
+                elif 'FAILED' in log.action:
+                    icon = '❌'
+                else:
+                    icon = '💳'
+            elif log.action_category == 'admin':
+                if 'IMPERSONATE' in log.action:
+                    icon = '🕵️'
+                elif 'DELETE' in log.action:
+                    icon = '🗑️'
+                elif 'TOGGLE' in log.action:
+                    icon = '🔒'
+                elif 'VERIFY' in log.action:
+                    icon = '✓'
+                else:
+                    icon = '⚙️'
+            elif log.action_category == 'view':
+                icon = '👁️'
+            
+            # Build a clean summary
+            summary = log.get_activity_summary()
             
             activity_data.append({
                 'id': log.id,
                 'timestamp': log.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
                 'user': log.user.email if log.user else 'Anonymous',
                 'user_name': log.user.full_name if log.user else 'System',
+                'user_role': log.user.role if log.user else 'system',
                 'action': action_display,
+                'action_summary': summary,
                 'action_code': log.action,
                 'category': log.action_category or 'system',
                 'icon': icon,
@@ -1355,6 +1348,7 @@ class AuditLogListView(APIView):
         action = request.query_params.get('action')
         category = request.query_params.get('category')
         user_email = request.query_params.get('user')
+        search = request.query_params.get('search')
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
         resource_type = request.query_params.get('resource_type')
@@ -1368,6 +1362,14 @@ class AuditLogListView(APIView):
             queryset = queryset.filter(action_category=category)
         if user_email:
             queryset = queryset.filter(user__email__icontains=user_email)
+        if search:
+            queryset = queryset.filter(
+                Q(user__email__icontains=search) |
+                Q(user__full_name__icontains=search) |
+                Q(action__icontains=search) |
+                Q(ip_address__icontains=search) |
+                Q(details__icontains=search)
+            )
         if start_date:
             queryset = queryset.filter(timestamp__gte=start_date)
         if end_date:
@@ -1391,12 +1393,16 @@ class AuditLogListView(APIView):
         
         data = []
         for log in logs:
+            # Use the human-readable methods
             data.append({
                 'id': log.id,
                 'timestamp': log.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
                 'user': log.user.email if log.user else 'System',
                 'user_name': log.user.full_name if log.user else 'System',
-                'action': log.action,
+                'user_role': log.user.role if log.user else 'system',
+                'action': log.get_human_readable_action(),
+                'action_code': log.action,
+                'action_summary': log.get_activity_summary(),
                 'category': log.action_category or 'system',
                 'details': log.details,
                 'ip_address': log.ip_address,
@@ -1412,6 +1418,8 @@ class AuditLogListView(APIView):
             'page': page,
             'page_size': page_size,
             'total_pages': (total + page_size - 1) // page_size,
+            'has_next': page < ((total + page_size - 1) // page_size),
+            'has_previous': page > 1,
             'filters': {
                 'available_actions': unique_actions,
                 'available_categories': unique_categories,
@@ -2151,7 +2159,7 @@ class VerifyUserView(APIView):
 
 # ==================== IMPERSONATION ====================
 class ImpersonateStartView(APIView):
-    """Start impersonating a user"""
+    """Start impersonating a user - returns JWT token for frontend redirect"""
     permission_classes = [IsAdminUser]
 
     def post(self, request):
@@ -2166,22 +2174,32 @@ class ImpersonateStartView(APIView):
             else:
                 return Response({'error': 'Email or user ID required'}, status=400)
             
-            # Don't allow impersonating other admins
-            if target_user.role == 'admin' or target_user.is_superuser:
+            # Don't allow impersonating other admins (but allow if superuser)
+            if (target_user.role == 'admin' or target_user.is_superuser) and not request.user.is_superuser:
                 return Response({'error': 'Cannot impersonate admin users'}, status=403)
             
             from rest_framework_simplejwt.tokens import RefreshToken
             
-            # Store original user info in session
+            # Store impersonation in session for audit trail
             request.session['impersonating_id'] = str(target_user.id)
             request.session['original_user_id'] = str(request.user.id)
             request.session['impersonating'] = True
+            request.session.save()
             
-            # Create impersonation token
+            # Create JWT tokens for the target user
             refresh = RefreshToken.for_user(target_user)
             refresh['impersonated_by'] = str(request.user.id)
+            refresh['impersonated_by_email'] = request.user.email
             refresh['is_impersonating'] = True
             refresh['original_role'] = request.user.role
+            
+            # Determine redirect URL based on user role
+            if target_user.role == 'owner':
+                redirect_url = '/owner/dashboard.html'
+            elif target_user.role == 'student':
+                redirect_url = '/student/dashboard.html'
+            else:
+                redirect_url = '/'
             
             # Log the impersonation
             AuditLog.objects.create(
@@ -2198,12 +2216,17 @@ class ImpersonateStartView(APIView):
             )
             
             return Response({
+                'status': 'success',
                 'access_token': str(refresh.access_token),
                 'refresh_token': str(refresh),
-                'user_email': target_user.email,
-                'user_name': target_user.full_name,
-                'user_role': target_user.role,
-                'is_impersonating': True
+                'user': {
+                    'id': str(target_user.id),
+                    'email': target_user.email,
+                    'full_name': target_user.full_name,
+                    'role': target_user.role
+                },
+                'redirect_url': redirect_url,
+                'message': f'Now impersonating {target_user.email}. Redirecting to their dashboard...'
             })
             
         except User.DoesNotExist:

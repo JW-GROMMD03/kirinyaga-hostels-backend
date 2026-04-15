@@ -695,7 +695,98 @@ class AuditLog(models.Model):
     
     def __str__(self):
         return f"{self.timestamp} - {self.user.email if self.user else 'Anonymous'} - {self.action}"
-
+    
+    def get_human_readable_action(self):
+        """Convert API endpoint to human-readable description"""
+        action_map = {
+            'LOGIN': 'Logged in',
+            'LOGIN_SUCCESS': 'Logged in successfully',
+            'LOGIN_FAILED': 'Failed login attempt',
+            'LOGIN_FAILED_WRONG_PORTAL': 'Wrong portal login attempt',
+            'LOGOUT': 'Logged out',
+            'CREATE_HOSTEL': 'Added a new hostel',
+            'UPDATE_HOSTEL': 'Updated hostel details',
+            'DELETE_HOSTEL': 'Removed a hostel',
+            'VIEW_HOSTEL': 'Viewed hostel',
+            'VIEW_HOSTEL_DETAIL': 'Viewed hostel details',
+            'VIEW_HOSTELS_LIST': 'Browsed hostels list',
+            'APPROVE_HOSTEL': 'Approved hostel',
+            'REJECT_HOSTEL': 'Rejected hostel',
+            'TOGGLE_FEATURED': 'Toggled hostel featured status',
+            'SAVE_HOSTEL': 'Saved hostel to favorites',
+            'UNSAVE_HOSTEL': 'Removed hostel from favorites',
+            'STUDENT_SIGNUP': 'Student registration',
+            'OWNER_SIGNUP': 'Hostel owner registration',
+            'APPROVE_OWNER': 'Approved hostel owner',
+            'REJECT_OWNER': 'Rejected hostel owner',
+            'TOGGLE_VERIFIED_BADGE': 'Toggled verified badge',
+            'TOGGLE_USER_STATUS': 'Changed user account status',
+            'DELETE_USER': 'Deleted user account',
+            'UNLOCK_USER': 'Unlocked user account',
+            'UPDATE_FRAUD_SCORE': 'Updated fraud score',
+            'CREATE_BOOKING': 'Made a booking',
+            'CANCEL_BOOKING': 'Cancelled booking',
+            'CREATE_REVIEW': 'Wrote a review',
+            'APPROVE_REVIEW': 'Approved review',
+            'REJECT_REVIEW': 'Rejected review',
+            'SUBSCRIPTION_PAYMENT_SUCCESS': 'Completed subscription payment',
+            'SUBSCRIPTION_PAYMENT_FAILED': 'Failed subscription payment',
+            'CANCEL_SUBSCRIPTION': 'Cancelled subscription',
+            'MANUAL_SUBSCRIPTION_ACTIVATION': 'Manually activated subscription',
+            'GRANT_BONUS_SUBSCRIPTION': 'Granted bonus subscription',
+            'REVOKE_SUBSCRIPTION': 'Revoked subscription',
+            'EXTEND_SUBSCRIPTION': 'Extended subscription',
+            'UPDATE_PROFILE': 'Updated profile information',
+            'UPDATE_ADMIN_PROFILE': 'Updated admin profile',
+            'UPDATE_AVATAR': 'Updated profile picture',
+            'DELETE_AVATAR': 'Removed profile picture',
+            'CHANGE_PASSWORD': 'Changed password',
+            'PASSWORD_RESET': 'Requested password reset',
+            '2FA_ENABLED': 'Enabled two-factor authentication',
+            '2FA_DISABLED': 'Disabled two-factor authentication',
+            'SEND_BULK_NOTIFICATION': 'Sent bulk notification',
+            'CREATE_ANNOUNCEMENT': 'Created announcement',
+            'UPDATE_SYSTEM_SETTINGS': 'Updated system settings',
+            'IMPERSONATE_USER': 'Started impersonating user',
+            'STOP_IMPERSONATION': 'Stopped impersonating user',
+            'VERIFY_USER': 'Verified user email',
+            'TEST_EMAIL': 'Tested email configuration',
+            'TEST_SMS': 'Tested SMS configuration',
+            'TEST_MPESA': 'Tested M-Pesa configuration',
+        }
+        
+        if self.action in action_map:
+            return action_map[self.action]
+        
+        # Fallback: format the action string
+        return self.action.replace('_', ' ').title()
+    
+    def get_activity_summary(self):
+        """Generate a user-friendly summary of the activity"""
+        summary = self.get_human_readable_action()
+        
+        # Add context from details
+        if self.details:
+            if 'hostel_name' in self.details:
+                summary += f": {self.details['hostel_name']}"
+            elif 'name' in self.details:
+                summary += f": {self.details['name']}"
+            elif 'plan' in self.details:
+                summary += f" ({self.details['plan']})"
+            elif 'amount' in self.details:
+                summary += f" - KES {self.details['amount']}"
+            elif 'owner' in self.details:
+                summary += f" for {self.details['owner']}"
+            elif 'student' in self.details:
+                summary += f" - {self.details['student']}"
+            elif 'email' in self.details:
+                summary += f": {self.details['email']}"
+            elif 'impersonated_user' in self.details:
+                summary += f": {self.details['impersonated_user']}"
+            elif 'reason' in self.details:
+                summary += f" - Reason: {self.details['reason']}"
+        
+        return summary
 
 class SystemSettings(models.Model):
     """System settings that persist in the database"""

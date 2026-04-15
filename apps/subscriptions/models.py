@@ -85,6 +85,12 @@ class OwnerSubscription(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+     # NEW FIELDS for bonus subscriptions and revoking
+    is_bonus = models.BooleanField(default=False, help_text="Whether this is a free bonus subscription")
+    revoked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='revoked_subscriptions')
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    bonus_weeks = models.IntegerField(null=True, blank=True, help_text="Number of weeks granted as bonus")
+    
     class Meta:
         ordering = ['-created_at']
     
