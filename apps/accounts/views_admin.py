@@ -466,7 +466,7 @@ class ToggleUserStatusView(APIView):
         except User.DoesNotExist:
             return Response({'error': 'User not found'}, status=404)
 class DeleteUserView(APIView):
-    """Delete a user account"""
+    """Hard delete a user account - completely removes from database"""
     permission_classes = [IsAdminUser]
 
     def delete(self, request, user_id):
@@ -474,17 +474,30 @@ class DeleteUserView(APIView):
             user = User.objects.get(id=user_id)
             email = user.email
             role = user.role
+            full_name = user.full_name
+            
+            # HARD DELETE - completely removes from database
             user.delete()
             
+            # Create audit log
             AuditLog.objects.create(
                 user=request.user,
                 action='DELETE_USER',
+                action_category='admin',
                 ip_address=get_client_ip(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                details={'user_id': str(user_id), 'email': email, 'role': role}
+                details={
+                    'deleted_user_id': str(user_id), 
+                    'deleted_email': email, 
+                    'deleted_role': role,
+                    'deleted_name': full_name
+                }
             )
             
-            return Response({'status': 'success'})
+            return Response({
+                'status': 'success',
+                'message': f'User {email} has been permanently deleted.'
+            })
         except User.DoesNotExist:
             return Response({'error': 'User not found'}, status=404)
 

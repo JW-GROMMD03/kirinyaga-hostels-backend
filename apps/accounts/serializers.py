@@ -28,9 +28,10 @@ class StudentSignupSerializer(serializers.ModelSerializer):
                  'registration_number', 'phone_number']
     
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with this email already exists")
-        return value
+    # Only check ACTIVE users - allows re-registration with deleted accounts
+      if User.objects.filter(email=value, is_active=True).exists():
+         raise serializers.ValidationError("A user with this email already exists")
+      return value
     
     def validate_phone_number(self, value):
         pattern = r'^(?:\+254|0)[17]\d{8}$'
@@ -101,7 +102,7 @@ class OwnerSignupSerializer(serializers.ModelSerializer):
                   'primary_phone', 'secondary_phone', 'room_types']
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
+        if User.objects.filter(email=value, is_active=True).exists():
             raise serializers.ValidationError("A user with this email already exists")
         return value
 
