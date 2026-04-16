@@ -1006,3 +1006,11 @@ class SupportSerializer(serializers.Serializer):
         if value not in valid_types:
             raise serializers.ValidationError(f"Type must be one of: {', '.join(valid_types)}")
         return value
+
+
+class UserProfileView(generics.RetrieveUpdateAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = UserSerializer
+
+    def get_object(self):
+        return self.request.user

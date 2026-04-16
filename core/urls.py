@@ -1,10 +1,11 @@
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
-from apps.accounts.views import UserProfileView 
 from django.conf.urls.static import static
 from django.http import HttpResponse
-from apps.accounts.views import SupportView, AdminProfileView, UserProfileView  # Add UserProfileView here
+
+# Import views properly
+from apps.accounts import views as account_views
 from apps.accounts import views_admin
 from apps.accounts.views_admin import (
     AdminProfileUpdateView,
@@ -13,7 +14,6 @@ from apps.accounts.views_admin import (
     ImpersonateStartView,
     ImpersonateStopView,
     NewsletterSubscribeView,
-    
 )
 
 def home(request):
@@ -23,8 +23,7 @@ urlpatterns = [
     path('', home, name='home'),
     path('admin/', admin.site.urls),
     
-    # ==================== ROOT-LEVEL ADMIN ENDPOINTS (for frontend dashboard) ====================
-    # Dashboard Stats
+    # ==================== ROOT-LEVEL ADMIN ENDPOINTS ====================
     path('api/dashboard/stats/', views_admin.DashboardStatsView.as_view(), name='dashboard-stats'),
     
     # User Management
@@ -79,7 +78,7 @@ urlpatterns = [
     # Announcements
     path('api/announcements/active/', views_admin.AnnouncementActiveView.as_view(), name='announcement-active'),
     
-    # ==================== AUTH ENDPOINTS (under /api/auth/) ====================
+    # ==================== AUTH ENDPOINTS ====================
     path('api/auth/', include('apps.accounts.urls')),
     path('api/admin/', include('apps.accounts.urls_admin')),
     
@@ -96,14 +95,14 @@ urlpatterns = [
     path('api/chat/', include('apps.chat.urls')),
     
     # Support
-    path('api/support/', SupportView.as_view(), name='support'),
+    path('api/support/', account_views.SupportView.as_view(), name='support'),
     
     # Admin Profile
-    path('api/admin/auth/profile/', AdminProfileView.as_view(), name='admin-profile'),
+    path('api/admin/auth/profile/', account_views.AdminProfileView.as_view(), name='admin-profile'),
     path('api/admin/auth/profile/update/', AdminProfileUpdateView.as_view(), name='admin-profile-update'),
     
-    # User Profile (for admin to view own profile)
-    path('api/auth/profile/', UserProfileView.as_view(), name='profile'),
+    # User Profile
+    path('api/auth/profile/', account_views.UserProfileView.as_view(), name='profile'),
     path('api/auth/profile/update/', AdminProfileUpdateView.as_view(), name='profile-update'),
     
     # Admin Announcements
