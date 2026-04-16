@@ -281,6 +281,11 @@ if os.environ.get('RENDER'):
     EMAIL_BACKEND = "anymail.backends.brevo.EmailBackend"
     ANYMAIL = {
         "BREVO_API_KEY": os.environ.get('BREVO_API_KEY', ''),
+        # ✅ DISABLE CLICK TRACKING - Prevents Brevo from rewriting verification links
+        "SEND_DEFAULTS": {
+            "track_clicks": False,
+            "track_opens": False,
+        },
     }
     DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@kirinyagahostels.com')
     
