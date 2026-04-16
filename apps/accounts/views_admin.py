@@ -526,6 +526,7 @@ class ApproveOwnerView(APIView):
             profile.approved_by = request.user
             profile.save()
             user.is_active = True
+            user.email_verified = True 
             user.save()
             
             AuditLog.objects.create(
