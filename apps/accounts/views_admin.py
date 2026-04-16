@@ -415,12 +415,22 @@ class OwnerDetailView(generics.RetrieveAPIView):
     queryset = User.objects.filter(role='owner').select_related('owner_profile')
 
 class ToggleUserStatusView(APIView):
-    """Lock or unlock a user account"""
+    """Lock or unlock a user account - ADMIN ACCOUNTS CANNOT BE BLOCKED"""
     permission_classes = [IsAdminUser]
 
     def post(self, request, user_id):
         try:
             user = User.objects.get(id=user_id)
+            
+            # PREVENT BLOCKING ADMIN ACCOUNTS
+            if user.role == 'admin' or user.is_superuser:
+                return Response({
+                    'status': 'error',
+                    'error': 'Admin accounts cannot be blocked for security reasons.',
+                    'is_active': user.is_active
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Toggle active status for non-admin users
             user.is_active = not user.is_active
             
             # Determine the action message
@@ -448,6 +458,7 @@ class ToggleUserStatusView(APIView):
             AuditLog.objects.create(
                 user=request.user,
                 action='TOGGLE_USER_STATUS',
+                action_category='admin',
                 ip_address=get_client_ip(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 details={
@@ -465,6 +476,7 @@ class ToggleUserStatusView(APIView):
             })
         except User.DoesNotExist:
             return Response({'error': 'User not found'}, status=404)
+        
 class DeleteUserView(APIView):
     """Hard delete a user account - completely removes from database"""
     permission_classes = [IsAdminUser]
