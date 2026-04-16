@@ -279,7 +279,10 @@ class AuditLogMiddleware:
 
 
 class RateLimitMiddleware:
-    """Simple rate limiting middleware"""
+    """
+    Rate limiting middleware that tracks attempts per USER (email) and per PORTAL.
+    This prevents one user's failed attempts from blocking other users on the same network.
+    """
     
     def __init__(self, get_response):
         self.get_response = get_response
@@ -290,46 +293,97 @@ class RateLimitMiddleware:
         if request.path.startswith('/admin/') or request.path.startswith('/static/'):
             return self.get_response(request)
 
-        # Get client IP
+        # Only rate limit login endpoints
+        if '/login/' in request.path and request.method == 'POST':
+            return self.handle_login_rate_limit(request)
+        
+        return self.get_response(request)
+    
+    def handle_login_rate_limit(self, request):
+        """Handle rate limiting for login attempts with per-user tracking"""
         ip = get_client_ip(request)
-
-        # Rate limiting for login attempts
-        if request.path.endswith('/login/') and request.method == 'POST':
-            cache_key = f"login_{ip}"
-            current_time = time.time()
-            
-            # Clean old entries
-            self.rate_limit_cache = {k: v for k, v in self.rate_limit_cache.items() 
-                                    if current_time - v['timestamp'] < 3600}
-            
-            if cache_key in self.rate_limit_cache:
-                attempts = self.rate_limit_cache[cache_key]['attempts']
-                if attempts >= 5:
-                    # Log rate limit hit
-                    logger.warning(f"Rate limit exceeded for IP {ip}")
-                    try:
-                        AuditLog.objects.create(
-                            user=None,
-                            action='RATE_LIMIT_EXCEEDED',
-                            ip_address=ip,
-                            user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                            details={'path': request.path, 'attempts': attempts}
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to log rate limit: {e}")
-                    
-                    return JsonResponse(
-                        {'error': 'Too many login attempts. Please try again later.'},
-                        status=429
+        current_time = time.time()
+        
+        # Determine portal type from URL
+        if 'admin/login' in request.path:
+            portal = 'admin'
+            max_attempts = getattr(settings, 'ADMIN_MAX_ATTEMPTS', 3)
+        elif 'owner/login' in request.path:
+            portal = 'owner'
+            max_attempts = getattr(settings, 'MAX_LOGIN_ATTEMPTS', 5)
+        elif 'student/login' in request.path:
+            portal = 'student'
+            max_attempts = getattr(settings, 'MAX_LOGIN_ATTEMPTS', 5)
+        else:
+            portal = 'auth'
+            max_attempts = 5
+        
+        # Try to get email from request body for per-user tracking
+        email = None
+        try:
+            if request.body:
+                body = json.loads(request.body.decode('utf-8'))
+                email = body.get('email', '').lower().strip()
+        except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+            pass
+        
+        # Create cache key: PER USER (if email available) + PORTAL
+        if email:
+            cache_key = f"login_attempts_{portal}_{email}"
+            identifier = f"user {email}"
+        else:
+            # Fallback to IP if no email in request
+            cache_key = f"login_attempts_{portal}_{ip}"
+            identifier = f"IP {ip}"
+        
+        # Clean old entries (older than 1 hour)
+        self.rate_limit_cache = {
+            k: v for k, v in self.rate_limit_cache.items() 
+            if current_time - v.get('timestamp', 0) < 3600
+        }
+        
+        # Check and update attempts
+        if cache_key in self.rate_limit_cache:
+            attempts = self.rate_limit_cache[cache_key]['attempts']
+            if attempts >= max_attempts:
+                # Log rate limit hit
+                logger.warning(f"Rate limit exceeded for {identifier} on {portal} portal")
+                try:
+                    AuditLog.objects.create(
+                        user=None,
+                        action='RATE_LIMIT_EXCEEDED',
+                        action_category='auth',
+                        ip_address=ip,
+                        user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                        details={
+                            'portal': portal,
+                            'identifier': identifier,
+                            'attempts': attempts,
+                            'max_attempts': max_attempts,
+                            'email': email
+                        }
                     )
-                self.rate_limit_cache[cache_key]['attempts'] += 1
-                self.rate_limit_cache[cache_key]['timestamp'] = current_time
-            else:
-                self.rate_limit_cache[cache_key] = {'attempts': 1, 'timestamp': current_time}
-
-        response = self.get_response(request)
-        return response
-
+                except Exception as e:
+                    logger.error(f"Failed to log rate limit: {e}")
+                
+                return JsonResponse({
+                    'error': f'Too many login attempts for {identifier}. Please try again later.',
+                    'portal': portal,
+                    'max_attempts': max_attempts
+                }, status=429)
+            
+            # Increment attempts
+            self.rate_limit_cache[cache_key]['attempts'] += 1
+            self.rate_limit_cache[cache_key]['timestamp'] = current_time
+        else:
+            self.rate_limit_cache[cache_key] = {
+                'attempts': 1, 
+                'timestamp': current_time,
+                'portal': portal
+            }
+        
+        # Allow the request to proceed
+        return self.get_response(request)
 
 class SingleSessionMiddleware:
     """Enforce single session per user"""

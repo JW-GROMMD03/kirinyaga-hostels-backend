@@ -24,6 +24,35 @@ from .serializers import (
 
 logger = logging.getLogger(__name__)
 
+
+def rate_limit_key_by_email_or_ip(group, request):
+    """
+    Custom rate limit key: uses email if available, otherwise IP.
+    This ensures rate limits are per user, not per IP.
+    """
+    # Try to get email from request body
+    email = None
+    try:
+        if request.body:
+            body = json.loads(request.body.decode('utf-8'))
+            email = body.get('email', '').lower().strip()
+    except:
+        pass
+    
+    # Get portal from URL
+    if 'admin/login' in request.path:
+        portal = 'admin'
+    elif 'owner/login' in request.path:
+        portal = 'owner'
+    elif 'student/login' in request.path:
+        portal = 'student'
+    else:
+        portal = 'auth'
+    
+    if email:
+        return f"{portal}_{email}"
+    return f"{portal}_{get_client_ip(request)}"
+
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
     if x_forwarded_for:
@@ -80,7 +109,7 @@ class OwnerSignupView(APIView):
 class StudentLoginView(APIView):
     permission_classes = [AllowAny]
 
-    @method_decorator(ratelimit(key='ip', rate='5/m', method='POST', block=True))
+    @method_decorator(ratelimit(key=rate_limit_key_by_email_or_ip, rate='5/m', method='POST', block=True))
     def post(self, request):
         serializer = StudentLoginSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
