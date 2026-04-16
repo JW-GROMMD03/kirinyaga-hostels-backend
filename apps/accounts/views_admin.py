@@ -525,6 +525,8 @@ class ApproveOwnerView(APIView):
             profile.approved_at = timezone.now()
             profile.approved_by = request.user
             profile.save()
+            user.is_active = True
+            user.save()
             
             AuditLog.objects.create(
                 user=request.user,
