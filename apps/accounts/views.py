@@ -1,11 +1,13 @@
 import logging
 from rest_framework import serializers
+from rest_framework import status, generics
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.utils import timezone
 from django.db import models
 import re
 import random
+import json
 from .models import User, StudentProfile, HostelOwnerProfile, RoomType, AdminNotification, PasswordResetToken, TwoFactorOTP, SystemSettings
 from apps.hostels.models import Hostel
 from apps.chat.models import Conversation, Message
