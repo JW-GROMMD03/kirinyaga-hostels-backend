@@ -106,27 +106,33 @@ def check_hostel_creation_eligibility(owner):
     """Check if owner can create a new hostel"""
     from .models import OwnerSubscription
     
+    # Get current month's hostels
+    current_month = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    hostels_this_month = owner.hostels.filter(created_at__gte=current_month).count()
+    total_hostels = owner.hostels.count()
+    
     try:
         subscription = OwnerSubscription.objects.filter(owner=owner, is_active=True).latest('created_at')
     except OwnerSubscription.DoesNotExist:
         subscription = None
     
-    # Check free tier monthly limit
-    current_month = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    hostels_this_month = owner.hostels.filter(created_at__gte=current_month).count()
+    # CASE 1: User has an active paid subscription
+    if subscription and not subscription.is_expired():
+        if subscription.plan.name == 'free':
+            # Free plan: 1 hostel per month
+            if hostels_this_month >= 1:
+                return False, "You have reached your free tier limit of 1 hostel per month. Please subscribe to add more hostels."
+            return True, "You can add 1 hostel this month on the free plan."
+        else:
+            # Paid plan: check plan limits
+            can, message = subscription.can_add_hostel()
+            return can, message
     
-    if subscription and subscription.plan.name == 'free':
-        if hostels_this_month >= 1:
-            return False, "You have reached your free tier limit of 1 hostel per month. Please subscribe to add more hostels."
+    #  CASE 2: No active subscription (true free tier)
+    if hostels_this_month >= 1:
+        return False, "You have reached the free tier limit of 1 hostel per month. Subscribe to add more."
     
-    if not subscription or not subscription.is_active or subscription.is_expired():
-        if hostels_this_month >= 1:
-            return False, "Your free trial has expired. Please subscribe to continue adding hostels."
-        return True, "You can add your first hostel for free this month."
-    
-    # Check subscription limits
-    can, message = subscription.can_add_hostel()
-    return can, message
+    return True, "You can add your first hostel for free this month."
 
 def check_image_upload_eligibility(owner, requested_image_count=1):
     """Check if owner can upload images for a hostel"""
