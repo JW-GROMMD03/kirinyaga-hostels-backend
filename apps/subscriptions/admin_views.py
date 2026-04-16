@@ -113,6 +113,14 @@ class AdminAllOwnersStatusView(APIView):
                 status='completed'
             ).aggregate(total=Sum('amount'))['total'] or 0
             
+            # ✅ Extract bonus reason
+            bonus_reason = None
+            if active_sub and active_sub.is_bonus and active_sub.admin_notes:
+                if ' - ' in active_sub.admin_notes:
+                    bonus_reason = active_sub.admin_notes.split(' - ', 1)[1]
+                else:
+                    bonus_reason = active_sub.admin_notes
+            
             result.append({
                 'id': str(owner.id),
                 'email': owner.email,
@@ -123,6 +131,8 @@ class AdminAllOwnersStatusView(APIView):
                 'current_plan_id': str(active_sub.plan.id) if active_sub and active_sub.plan else None,
                 'subscription_status': 'active' if active_sub else 'inactive',
                 'is_bonus': active_sub.is_bonus if active_sub else False,
+                'bonus_weeks': active_sub.bonus_weeks if active_sub else None,
+                'bonus_reason': bonus_reason,
                 'days_remaining': active_sub.days_remaining() if active_sub else 0,
                 'end_date': active_sub.end_date if active_sub else None,
                 'total_hostels': hostel_count,
@@ -182,6 +192,9 @@ class AdminGrantBonusSubscriptionView(APIView):
             auto_renew=False
         )
         
+        # ✅ Create admin_notes with reason clearly separated
+        admin_notes = f'Bonus: {bonus_weeks} weeks - {reason}'
+        
         # Create bonus subscription
         subscription = OwnerSubscription.objects.create(
             owner=owner,
@@ -194,7 +207,7 @@ class AdminGrantBonusSubscriptionView(APIView):
             payment_reference=f'BONUS-{timezone.now().strftime("%Y%m%d%H%M%S")}',
             amount_paid=0,
             auto_renew=False,
-            admin_notes=f'Bonus: {bonus_weeks} weeks - {reason}',
+            admin_notes=admin_notes,
             manually_activated_by=request.user,
             is_bonus=True,
             bonus_weeks=bonus_weeks
@@ -228,9 +241,12 @@ class AdminGrantBonusSubscriptionView(APIView):
             }
         )
         
+        # ✅ Return the created subscription with full details
+        serializer = OwnerSubscriptionSerializer(subscription)
         return Response({
             'status': 'success',
             'message': f'Bonus subscription granted to {owner.email} for {bonus_weeks} weeks',
+            'subscription': serializer.data,
             'subscription_id': str(subscription.id),
             'expires_on': subscription.end_date.strftime('%Y-%m-%d %H:%M:%S')
         })

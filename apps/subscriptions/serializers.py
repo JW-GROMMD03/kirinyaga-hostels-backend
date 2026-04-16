@@ -19,17 +19,26 @@ class OwnerSubscriptionSerializer(serializers.ModelSerializer):
     plan_details = SubscriptionPlanSerializer(source='plan', read_only=True)
     owner_email = serializers.EmailField(source='owner.email', read_only=True)
     owner_name = serializers.CharField(source='owner.full_name', read_only=True)
+    owner_id = serializers.UUIDField(source='owner.id', read_only=True)
+    plan_name = serializers.CharField(source='plan.display_name', read_only=True)
+    plan_display_name = serializers.CharField(source='plan.display_name', read_only=True)
     days_remaining = serializers.SerializerMethodField()
     is_expired = serializers.SerializerMethodField()
     can_add_hostel = serializers.SerializerMethodField()
+    bonus_reason = serializers.SerializerMethodField()
     
     class Meta:
         model = OwnerSubscription
-        fields = ['id', 'owner', 'owner_email', 'owner_name', 'plan', 'plan_details',
-                  'start_date', 'end_date', 'is_active', 'auto_renew', 'payment_status',
-                  'payment_method', 'payment_reference', 'amount_paid', 'mpesa_receipt_number',
-                  'days_remaining', 'is_expired', 'can_add_hostel', 'admin_notes',
-                  'created_at', 'updated_at']
+        fields = [
+            'id', 'owner', 'owner_id', 'owner_email', 'owner_name', 'plan', 'plan_details',
+            'plan_name', 'plan_display_name',
+            'start_date', 'end_date', 'is_active', 'auto_renew', 'payment_status',
+            'payment_method', 'payment_reference', 'amount_paid', 'mpesa_receipt_number',
+            'days_remaining', 'is_expired', 'can_add_hostel', 'admin_notes',
+            'created_at', 'updated_at',
+            # ✅ ADDED BONUS FIELDS
+            'is_bonus', 'bonus_weeks', 'bonus_reason',
+        ]
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_days_remaining(self, obj):
@@ -41,6 +50,16 @@ class OwnerSubscriptionSerializer(serializers.ModelSerializer):
     def get_can_add_hostel(self, obj):
         can, message = obj.can_add_hostel()
         return {'can': can, 'message': message}
+    
+    def get_bonus_reason(self, obj):
+        """Extract the bonus reason from admin_notes"""
+        if obj.is_bonus and obj.admin_notes:
+            # Try to extract reason from admin_notes
+            # Format: "Bonus: X weeks - Reason here"
+            if ' - ' in obj.admin_notes:
+                return obj.admin_notes.split(' - ', 1)[1]
+            return obj.admin_notes
+        return None
 
 
 class CreateSubscriptionSerializer(serializers.Serializer):

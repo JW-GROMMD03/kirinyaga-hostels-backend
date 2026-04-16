@@ -165,12 +165,27 @@ def check_analytics_access(owner):
     
     return True, ""
 
+def extract_bonus_reason(subscription):
+    """Extract the bonus reason from admin_notes"""
+    if not subscription:
+        return None
+    if subscription.is_bonus and subscription.admin_notes:
+        # Format: "Bonus: X weeks - Reason here"
+        if ' - ' in subscription.admin_notes:
+            return subscription.admin_notes.split(' - ', 1)[1]
+        return subscription.admin_notes
+    return None
+
 def get_owner_subscription_status(owner):
     """Get current subscription status for owner"""
     from .models import OwnerSubscription
     
     try:
         subscription = OwnerSubscription.objects.filter(owner=owner, is_active=True).latest('created_at')
+        
+        # ✅ Extract bonus reason
+        bonus_reason = extract_bonus_reason(subscription)
+        
         return {
             'has_active_subscription': not subscription.is_expired(),
             'plan': subscription.plan.name if subscription.plan else 'free',
@@ -183,6 +198,13 @@ def get_owner_subscription_status(owner):
             'can_add_hostel': check_hostel_creation_eligibility(owner)[0],
             'can_feature': subscription.plan.can_feature_listings if subscription.plan else False,
             'has_analytics_access': subscription.plan.analytics_access if subscription.plan else False,
+            # ✅ ADDED BONUS FIELDS
+            'is_bonus': subscription.is_bonus if subscription else False,
+            'bonus_weeks': subscription.bonus_weeks if subscription else None,
+            'bonus_reason': bonus_reason,
+            'payment_method': subscription.payment_method if subscription else None,
+            'auto_renew': subscription.auto_renew if subscription else False,
+            'start_date': subscription.start_date if subscription else None,
         }
     except OwnerSubscription.DoesNotExist:
         # Free tier
@@ -201,4 +223,10 @@ def get_owner_subscription_status(owner):
             'can_add_hostel': hostels_this_month < 1,
             'can_feature': False,
             'has_analytics_access': False,
+            'is_bonus': False,
+            'bonus_weeks': None,
+            'bonus_reason': None,
+            'payment_method': None,
+            'auto_renew': False,
+            'start_date': None,
         }
