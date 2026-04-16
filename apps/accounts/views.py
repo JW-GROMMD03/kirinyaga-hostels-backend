@@ -1,6 +1,7 @@
 import logging
 from rest_framework import serializers
 from rest_framework import status, generics
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.utils import timezone
