@@ -281,12 +281,11 @@ class AuditLogMiddleware:
 class RateLimitMiddleware:
     """
     Rate limiting middleware that tracks attempts per USER (email) and per PORTAL.
-    This prevents one user's failed attempts from blocking other users on the same network.
+    Now uses DATABASE User model instead of in-memory cache.
     """
     
     def __init__(self, get_response):
         self.get_response = get_response
-        self.rate_limit_cache = {}
 
     def __call__(self, request):
         # Skip for admin and static files
@@ -300,9 +299,8 @@ class RateLimitMiddleware:
         return self.get_response(request)
     
     def handle_login_rate_limit(self, request):
-        """Handle rate limiting for login attempts with per-user tracking"""
+        """Handle rate limiting for login attempts - now uses database User model"""
         ip = get_client_ip(request)
-        current_time = time.time()
         
         # Determine portal type from URL
         if 'admin/login' in request.path:
@@ -318,7 +316,7 @@ class RateLimitMiddleware:
             portal = 'auth'
             max_attempts = 5
         
-        # Try to get email from request body for per-user tracking
+        # Try to get email from request body
         email = None
         try:
             if request.body:
@@ -327,60 +325,56 @@ class RateLimitMiddleware:
         except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
             pass
         
-        # Create cache key: PER USER (if email available) + PORTAL
+        # If we have an email, check the User model's failed_login_attempts
         if email:
-            cache_key = f"login_attempts_{portal}_{email}"
-            identifier = f"user {email}"
-        else:
-            # Fallback to IP if no email in request
-            cache_key = f"login_attempts_{portal}_{ip}"
-            identifier = f"IP {ip}"
-        
-        # Clean old entries (older than 1 hour)
-        self.rate_limit_cache = {
-            k: v for k, v in self.rate_limit_cache.items() 
-            if current_time - v.get('timestamp', 0) < 3600
-        }
-        
-        # Check and update attempts
-        if cache_key in self.rate_limit_cache:
-            attempts = self.rate_limit_cache[cache_key]['attempts']
-            if attempts >= max_attempts:
-                # Log rate limit hit
-                logger.warning(f"Rate limit exceeded for {identifier} on {portal} portal")
-                try:
+            try:
+                from .models import User
+                user = User.objects.get(email=email)
+                
+                # Check if user is already locked in database
+                if user.locked_until and user.locked_until > timezone.now():
+                    remaining = user.locked_until - timezone.now()
+                    logger.warning(f"User {email} is locked until {user.locked_until}")
+                    return JsonResponse({
+                        'error': f'Account locked. Try again in {remaining.seconds // 60} minutes.',
+                        'locked': True,
+                        'remaining_seconds': remaining.seconds
+                    }, status=429)
+                
+                # Check if user has exceeded max attempts
+                if user.failed_login_attempts >= max_attempts:
+                    # Lock the account in database
+                    lockout_hours = getattr(settings, 'LOCKOUT_HOURS', 1)
+                    user.locked_until = timezone.now() + timezone.timedelta(hours=lockout_hours)
+                    user.save()
+                    
+                    logger.warning(f"Rate limit exceeded for {email} on {portal} portal - LOCKED FOR {lockout_hours} HOUR(S)")
+                    
                     AuditLog.objects.create(
-                        user=None,
+                        user=user,
                         action='RATE_LIMIT_EXCEEDED',
                         action_category='auth',
                         ip_address=ip,
                         user_agent=request.META.get('HTTP_USER_AGENT', ''),
                         details={
                             'portal': portal,
-                            'identifier': identifier,
-                            'attempts': attempts,
+                            'email': email,
+                            'attempts': user.failed_login_attempts,
                             'max_attempts': max_attempts,
-                            'email': email
+                            'locked_for_hours': lockout_hours
                         }
                     )
-                except Exception as e:
-                    logger.error(f"Failed to log rate limit: {e}")
-                
-                return JsonResponse({
-                    'error': f'Too many login attempts for {identifier}. Please try again later.',
-                    'portal': portal,
-                    'max_attempts': max_attempts
-                }, status=429)
-            
-            # Increment attempts
-            self.rate_limit_cache[cache_key]['attempts'] += 1
-            self.rate_limit_cache[cache_key]['timestamp'] = current_time
-        else:
-            self.rate_limit_cache[cache_key] = {
-                'attempts': 1, 
-                'timestamp': current_time,
-                'portal': portal
-            }
+                    
+                    return JsonResponse({
+                        'error': f'Too many login attempts. Account locked for {lockout_hours} hour(s).',
+                        'locked': True,
+                        'portal': portal,
+                        'max_attempts': max_attempts,
+                        'lockout_hours': lockout_hours
+                    }, status=429)
+                    
+            except User.DoesNotExist:
+                pass  # User not found, let the view handle it
         
         # Allow the request to proceed
         return self.get_response(request)
