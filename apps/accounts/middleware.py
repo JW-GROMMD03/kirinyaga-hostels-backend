@@ -591,23 +591,22 @@ class AdminActivityMiddleware:
 class MaintenanceModeMiddleware:
     """
     Puts the entire site into maintenance mode when an admin flips the switch.
-    Regular users see a friendly maintenance page while admins can still access
-    everything to make changes or turn it back off.
     
-    The maintenance status is stored in the database so it survives server restarts,
-    and we check it on every request to make sure it's always accurate.
+    IMPORTANT RULES:
+    - Admin users and admin API endpoints are ALWAYS allowed through.
+    - Regular users see the maintenance page.
+    - Login attempts during maintenance return a special response (not "invalid password").
     """
     
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        # Skip the check entirely if we're already on the maintenance page itself
-        # (prevents redirect loops)
+        # Don't block the maintenance page itself
         if request.path.startswith('/maintenance') or request.path.startswith('/api/maintenance'):
             return self.get_response(request)
         
-        # Handle OPTIONS requests (CORS preflight) - always allow these through
+        # CORS preflight always allowed
         if request.method == 'OPTIONS':
             response = self.get_response(request)
             response['Access-Control-Allow-Origin'] = 'https://kirinyaga-hostels-frontend.onrender.com'
@@ -616,35 +615,33 @@ class MaintenanceModeMiddleware:
             response['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRFToken'
             return response
         
-        # Grab the system settings from the database to see if maintenance is on
+        # Check database for maintenance status
         try:
             from apps.accounts.models import SystemSettings
             settings_obj = SystemSettings.get_settings()
             maintenance_mode = settings_obj.maintenance_mode
             maintenance_message = getattr(settings_obj, 'maintenance_message', '')
+            maintenance_started_at = getattr(settings_obj, 'maintenance_started_at', None)
             estimated_time = getattr(settings_obj, 'maintenance_estimated_time', '')
         except Exception as e:
-            # If we can't reach the database for some reason, fall back to False
-            # Better to let the site work than block everyone unnecessarily
-            logger.error(f"Failed to check maintenance mode from database: {e}")
-            maintenance_mode = getattr(settings, 'MAINTENANCE_MODE', False)
+            logger.error(f"Failed to check maintenance mode: {e}")
+            maintenance_mode = False
             maintenance_message = ''
+            maintenance_started_at = None
             estimated_time = ''
         
-        # If maintenance is off, everyone can proceed normally
+        # Maintenance is OFF - everyone proceeds
         if not maintenance_mode:
             return self.get_response(request)
         
-        # Maintenance mode is ON - now we need to decide who gets through
+        # ========== MAINTENANCE MODE IS ON ==========
         
-        # Rule 1: Admin users can always access everything
-        # They need to be able to turn maintenance off or make fixes
+        # RULE 1: Admin users ALWAYS get full access
         if request.user.is_authenticated:
             if request.user.role == 'admin' or request.user.is_superuser or request.user.is_staff:
                 return self.get_response(request)
         
-        # Rule 2: Admin API endpoints MUST stay accessible during maintenance
-        # This is critical - otherwise admins get locked out and can't turn it off!
+        # RULE 2: ALL admin API paths must be accessible
         admin_api_paths = [
             '/api/auth/settings/',
             '/api/auth/admin/',
@@ -665,30 +662,39 @@ class MaintenanceModeMiddleware:
         
         for allowed in admin_api_paths:
             if request.path.startswith(allowed):
-                # Double-check authentication for sensitive endpoints
                 if request.user.is_authenticated and (request.user.role == 'admin' or request.user.is_superuser):
                     return self.get_response(request)
-                # If it's a public admin path like /admin/login/, still allow it
                 if '/login/' in request.path or '/static/' in request.path or '/media/' in request.path:
                     return self.get_response(request)
                 break
         
-        # Rule 3: Everyone else gets blocked and sees the maintenance message
+        #  RULE 3: Login endpoints - return maintenance status (not "invalid password")
+        is_login_attempt = '/login/' in request.path and request.method == 'POST'
         
-        # Check if this is an API request (expects JSON) or a browser request (expects HTML)
+        # Check if this is an API request
         is_api_request = request.path.startswith('/api/') or \
                          request.headers.get('Accept') == 'application/json' or \
                          request.headers.get('Content-Type') == 'application/json'
         
         if is_api_request:
-            # API clients get a clean JSON response
+            # For login attempts during maintenance, return a special response
+            if is_login_attempt:
+                return JsonResponse({
+                    'error': 'Maintenance Mode',
+                    'message': 'Kirinyaga Hostels is currently under maintenance. Please try again later.',
+                    'maintenance': True,
+                    'estimated_time': estimated_time or 'a few minutes',
+                    'maintenance_started_at': maintenance_started_at.isoformat() if maintenance_started_at else None
+                }, status=503)
+            
+            # For other API requests
             return JsonResponse({
                 'error': 'Maintenance Mode',
-                'message': maintenance_message or 'Kirinyaga Hostels is currently undergoing scheduled maintenance. We\'ll be back shortly!',
+                'message': maintenance_message or 'Kirinyaga Hostels is currently undergoing scheduled maintenance.',
                 'estimated_time': estimated_time or 'a few minutes',
                 'maintenance': True
             }, status=503)
         else:
-            # Browser users get redirected to the friendly maintenance page
+            # Browser users get redirected to maintenance page
             from django.shortcuts import redirect
             return redirect('/maintenance.html')

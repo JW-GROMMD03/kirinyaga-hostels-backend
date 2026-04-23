@@ -1544,6 +1544,7 @@ class SystemSettingsView(APIView):
             'maintenance_mode': settings_obj.maintenance_mode,
             'maintenance_message': settings_obj.maintenance_message or '',
             'maintenance_estimated_time': settings_obj.maintenance_estimated_time or '',
+            'maintenance_started_at': settings_obj.maintenance_started_at,
             'features': {
                 'roommate_finder': settings_obj.roommate_finder_enabled,
                 'student_reviews': settings_obj.student_reviews_enabled,
@@ -1577,6 +1578,13 @@ class SystemSettingsView(APIView):
             
             
             if 'maintenance_mode' in request.data:
+                new_mode = bool(request.data['maintenance_mode'])
+                 # If turning ON, record the start time
+                if new_mode and not settings_obj.maintenance_mode:
+                    settings_obj.maintenance_started_at = timezone.now()
+                  # If turning OFF, clear the start time
+                elif not new_mode:
+                    settings_obj.maintenance_started_at = None
                 settings_obj.maintenance_mode = bool(request.data['maintenance_mode'])
             if 'maintenance_message' in request.data:
                 settings_obj.maintenance_message = request.data['maintenance_message']
