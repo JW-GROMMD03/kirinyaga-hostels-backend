@@ -587,24 +587,90 @@ class AdminActivityMiddleware:
 
 class MaintenanceModeMiddleware:
     """
-    Middleware to put the site in maintenance mode.
+    Puts the entire site into maintenance mode when an admin flips the switch.
+    Regular users see a friendly maintenance page while admins can still access
+    everything to make changes or turn it back off.
+    
+    The maintenance status is stored in the database so it survives server restarts,
+    and we check it on every request to make sure it's always accurate.
     """
     
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        # Check if maintenance mode is enabled
-        maintenance_mode = getattr(settings, 'MAINTENANCE_MODE', False)
+        # Skip the check entirely if we're already on the maintenance page itself
+        # (prevents redirect loops)
+        if request.path.startswith('/maintenance') or request.path.startswith('/api/maintenance'):
+            return self.get_response(request)
         
-        if maintenance_mode:
-            # Allow access to admin and maintenance paths
-            allowed_paths = ['/admin/', '/api/admin/', '/maintenance/', '/login/']
-            if not any(request.path.startswith(path) for path in allowed_paths):
-                return JsonResponse({
-                    'error': 'Maintenance Mode',
-                    'message': 'The system is currently under maintenance. Please try again later.',
-                    'estimated_time': getattr(settings, 'MAINTENANCE_ESTIMATED_TIME', '30 minutes')
-                }, status=503)
+        # Handle OPTIONS requests (CORS preflight) - always allow these through
+        if request.method == 'OPTIONS':
+            response = self.get_response(request)
+            response['Access-Control-Allow-Origin'] = 'https://kirinyaga-hostels-frontend.onrender.com'
+            response['Access-Control-Allow-Credentials'] = 'true'
+            response['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+            response['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRFToken'
+            return response
         
-        return self.get_response(request)
+        # Grab the system settings from the database to see if maintenance is on
+        try:
+            from apps.accounts.models import SystemSettings
+            settings_obj = SystemSettings.get_settings()
+            maintenance_mode = settings_obj.maintenance_mode
+            maintenance_message = getattr(settings_obj, 'maintenance_message', '')
+            estimated_time = getattr(settings_obj, 'maintenance_estimated_time', '')
+        except Exception as e:
+            # If we can't reach the database for some reason, fall back to False
+            # Better to let the site work than block everyone unnecessarily
+            logger.error(f"Failed to check maintenance mode from database: {e}")
+            maintenance_mode = getattr(settings, 'MAINTENANCE_MODE', False)
+            maintenance_message = ''
+            estimated_time = ''
+        
+        # If maintenance is off, everyone can proceed normally
+        if not maintenance_mode:
+            return self.get_response(request)
+        
+        # Maintenance mode is ON - now we need to decide who gets through
+        
+        # Rule 1: Admin users can always access everything
+        # They need to be able to turn maintenance off or make fixes
+        if request.user.is_authenticated:
+            if request.user.role == 'admin' or request.user.is_superuser or request.user.is_staff:
+                return self.get_response(request)
+        
+        # Rule 2: Certain paths are always allowed even during maintenance
+        allowed_paths = [
+            '/admin/',
+            '/api/admin/',
+            '/api/auth/admin/',
+            '/api/auth/login/',
+            '/api/auth/logout/',
+            '/static/',
+            '/media/',
+        ]
+        
+        for allowed in allowed_paths:
+            if request.path.startswith(allowed):
+                return self.get_response(request)
+        
+        # Rule 3: Everyone else gets blocked and sees the maintenance message
+        
+        # Check if this is an API request (expects JSON) or a browser request (expects HTML)
+        is_api_request = request.path.startswith('/api/') or \
+                         request.headers.get('Accept') == 'application/json' or \
+                         request.headers.get('Content-Type') == 'application/json'
+        
+        if is_api_request:
+            # API clients get a clean JSON response
+            return JsonResponse({
+                'error': 'Maintenance Mode',
+                'message': maintenance_message or 'Kirinyaga Hostels is currently undergoing scheduled maintenance. We\'ll be back shortly!',
+                'estimated_time': estimated_time or 'a few minutes',
+                'maintenance': True
+            }, status=503)
+        else:
+            # Browser users get redirected to the friendly maintenance page
+            from django.shortcuts import redirect
+            return redirect('/maintenance.html')

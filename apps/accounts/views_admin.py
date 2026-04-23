@@ -1542,6 +1542,8 @@ class SystemSettingsView(APIView):
             'twofa_required': settings_obj.twofa_required,
             'session_timeout': settings_obj.session_timeout,
             'maintenance_mode': settings_obj.maintenance_mode,
+            'maintenance_message': settings_obj.maintenance_message or '',
+            'maintenance_estimated_time': settings_obj.maintenance_estimated_time or '',
             'features': {
                 'roommate_finder': settings_obj.roommate_finder_enabled,
                 'student_reviews': settings_obj.student_reviews_enabled,
@@ -1572,8 +1574,14 @@ class SystemSettingsView(APIView):
                 settings_obj.twofa_required = bool(request.data['twofa_required'])
             if 'session_timeout' in request.data:
                 settings_obj.session_timeout = int(request.data['session_timeout'])
+            
+            
             if 'maintenance_mode' in request.data:
                 settings_obj.maintenance_mode = bool(request.data['maintenance_mode'])
+            if 'maintenance_message' in request.data:
+                settings_obj.maintenance_message = request.data['maintenance_message']
+            if 'maintenance_estimated_time' in request.data:
+                settings_obj.maintenance_estimated_time = request.data['maintenance_estimated_time']
             
             features = request.data.get('features', {})
             if features:
@@ -1596,12 +1604,20 @@ class SystemSettingsView(APIView):
             AuditLog.objects.create(
                 user=request.user,
                 action='UPDATE_SYSTEM_SETTINGS',
+                action_category='admin',
                 ip_address=get_client_ip(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                details={'settings': request.data}
+                details={
+                    'maintenance_mode': settings_obj.maintenance_mode,
+                    'updated_by': request.user.email
+                }
             )
             
-            return Response({'status': 'success', 'message': 'Settings saved successfully'})
+            return Response({
+                'status': 'success', 
+                'message': 'Settings saved successfully',
+                'maintenance_mode': settings_obj.maintenance_mode
+            })
             
         except Exception as e:
             logger.error(f"Error saving system settings: {e}", exc_info=True)

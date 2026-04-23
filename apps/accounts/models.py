@@ -799,6 +799,8 @@ class SystemSettings(models.Model):
     twofa_required = models.BooleanField(default=False)
     session_timeout = models.IntegerField(default=30, help_text='Session timeout in minutes')
     maintenance_mode = models.BooleanField(default=False)
+    maintenance_message = models.TextField(blank=True, default='', help_text='Message to show during maintenance')
+    maintenance_estimated_time = models.CharField(max_length=100, blank=True, default='', help_text='Estimated time (e.g., "30 minutes", "2 hours")')
     
     # Features
     roommate_finder_enabled = models.BooleanField(default=True)
