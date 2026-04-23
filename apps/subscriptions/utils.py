@@ -6,13 +6,21 @@ from django.conf import settings
 from django.utils import timezone
 
 def generate_password(shortcode, passkey, timestamp):
-    """Generate M-Pesa API password"""
+    """
+    Build the encoded password that Safaricom requires for API calls.
+    Takes the business shortcode, passkey, and current timestamp,
+    combines them into one string, then encodes it in base64 format.
+    """
     data_to_encode = shortcode + passkey + timestamp
     encoded = base64.b64encode(data_to_encode.encode())
     return encoded.decode('utf-8')
 
 def get_access_token():
-    """Get M-Pesa access token"""
+    """
+    Request an OAuth token from Safaricom's sandbox.
+    This token is needed for all subsequent M-Pesa API requests.
+    Returns the access token string if successful, None if something goes wrong.
+    """
     consumer_key = settings.MPESA_CONSUMER_KEY
     consumer_secret = settings.MPESA_CONSUMER_SECRET
     
@@ -24,15 +32,20 @@ def get_access_token():
         result = response.json()
         return result.get('access_token')
     except Exception as e:
-        print(f"Error getting access token: {e}")
+        print(f"Could not fetch M-Pesa access token: {e}")
         return None
 
 def stk_push(phone_number, amount, account_reference, transaction_desc, callback_url):
-    """Initiate M-Pesa STK Push"""
+    """
+    Trigger the STK push popup on a customer's phone.
+    This is what makes the M-Pesa PIN entry screen appear.
+    Returns the response data from Safaricom if successful.
+    """
     access_token = get_access_token()
     if not access_token:
         return None
     
+    # Build the timestamp that Safaricom expects (YYYYMMDDHHMMSS format)
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     password = generate_password(settings.MPESA_SHORTCODE, settings.MPESA_PASSKEY, timestamp)
     
@@ -43,7 +56,7 @@ def stk_push(phone_number, amount, account_reference, transaction_desc, callback
         'Content-Type': 'application/json'
     }
     
-    # Format phone number (remove 0 or +254, add 254)
+    # Clean up the phone number - Safaricom wants 254XXXXXXXXX format
     if phone_number.startswith('0'):
         phone_number = '254' + phone_number[1:]
     elif phone_number.startswith('+'):
@@ -59,8 +72,8 @@ def stk_push(phone_number, amount, account_reference, transaction_desc, callback
         'PartyB': settings.MPESA_SHORTCODE,
         'PhoneNumber': phone_number,
         'CallBackURL': callback_url,
-        'AccountReference': account_reference[:12],
-        'TransactionDesc': transaction_desc[:13]
+        'AccountReference': account_reference[:12],  # Safaricom limits this to 12 characters
+        'TransactionDesc': transaction_desc[:13]     # And this to 13 characters
     }
     
     try:
@@ -68,11 +81,14 @@ def stk_push(phone_number, amount, account_reference, transaction_desc, callback
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        print(f"Error in STK push: {e}")
+        print(f"STK push didn't go through: {e}")
         return None
 
 def check_transaction_status(checkout_request_id):
-    """Check M-Pesa transaction status"""
+    """
+    Query Safaricom to find out what happened with a payment.
+    Useful for confirming if money was actually sent when the callback fails.
+    """
     access_token = get_access_token()
     if not access_token:
         return None
@@ -99,43 +115,49 @@ def check_transaction_status(checkout_request_id):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        print(f"Error checking transaction status: {e}")
+        print(f"Could not check transaction status: {e}")
         return None
 
 def check_hostel_creation_eligibility(owner):
-    """Check if owner can create a new hostel"""
+    """
+    Figure out if this owner is allowed to add another hostel.
+    Free users get one hostel per calendar month.
+    Paid users are limited by whatever their plan allows.
+    """
     from .models import OwnerSubscription
     
-    # Get current month's hostels
+    # Count how many hostels they've added since the first of this month
     current_month = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     hostels_this_month = owner.hostels.filter(created_at__gte=current_month).count()
-    total_hostels = owner.hostels.count()
     
     try:
         subscription = OwnerSubscription.objects.filter(owner=owner, is_active=True).latest('created_at')
     except OwnerSubscription.DoesNotExist:
         subscription = None
     
-    # CASE 1: User has an active paid subscription
+    # SCENARIO 1: They're paying for a subscription
     if subscription and not subscription.is_expired():
         if subscription.plan.name == 'free':
-            # Free plan: 1 hostel per month
+            # Even if they have a "free" subscription record, enforce the monthly limit
             if hostels_this_month >= 1:
-                return False, "You have reached your free tier limit of 1 hostel per month. Please subscribe to add more hostels."
-            return True, "You can add 1 hostel this month on the free plan."
+                return False, "You've already used your free hostel for this month. Upgrade to add more anytime you want."
+            return True, "You can add your free hostel for this month."
         else:
-            # Paid plan: check plan limits
+            # Paid plan - let the subscription model check its own rules
             can, message = subscription.can_add_hostel()
             return can, message
     
-    #  CASE 2: No active subscription (true free tier)
+    # SCENARIO 2: Pure free tier (no subscription record at all)
     if hostels_this_month >= 1:
-        return False, "You have reached the free tier limit of 1 hostel per month. Subscribe to add more."
+        return False, "You've reached the free tier limit of one hostel per month. Consider upgrading to add more hostels."
     
-    return True, "You can add your first hostel for free this month."
+    return True, "Ready to add your first hostel! You get one free listing per month."
 
 def check_image_upload_eligibility(owner, requested_image_count=1):
-    """Check if owner can upload images for a hostel"""
+    """
+    Make sure the owner isn't trying to upload more photos than their plan permits.
+    Different subscription tiers allow different numbers of images per hostel.
+    """
     from .models import OwnerSubscription
     
     try:
@@ -143,19 +165,23 @@ def check_image_upload_eligibility(owner, requested_image_count=1):
     except OwnerSubscription.DoesNotExist:
         subscription = None
     
-    # Default max images per hostel is 6
+    # Everyone gets at least 6 images by default
     max_images_per_hostel = 6
     
     if subscription and not subscription.is_expired():
         max_images_per_hostel = subscription.plan.max_images_per_hostel if subscription.plan else 6
     
     if requested_image_count > max_images_per_hostel:
-        return False, f"You can only upload up to {max_images_per_hostel} images per hostel. Your {subscription.plan.display_name if subscription else 'Free'} plan allows {max_images_per_hostel} images."
+        plan_name = subscription.plan.display_name if subscription else "Free"
+        return False, f"Your {plan_name} plan only allows {max_images_per_hostel} photos per hostel. You tried to upload {requested_image_count}."
     
     return True, ""
 
 def check_analytics_access(owner):
-    """Check if owner has access to analytics features"""
+    """
+    Only certain paid plans get to see the analytics dashboard.
+    Check if this owner's subscription includes that perk.
+    """
     from .models import OwnerSubscription
     
     try:
@@ -164,32 +190,38 @@ def check_analytics_access(owner):
         subscription = None
     
     if not subscription or subscription.is_expired():
-        return False, "Analytics access requires an active subscription. Please subscribe to view analytics."
+        return False, "Analytics are a premium feature. You'll need an active subscription to view them."
     
     if not subscription.plan.analytics_access:
-        return False, f"Your {subscription.plan.display_name} plan does not include analytics access. Upgrade to Premium or Enterprise to access analytics."
+        return False, f"Your {subscription.plan.display_name} plan doesn't include analytics. The Premium and Enterprise plans do."
     
     return True, ""
 
 def extract_bonus_reason(subscription):
-    """Extract the bonus reason from admin_notes"""
+    """
+    Pull out the reason why a bonus was given, if there is one.
+    The admin notes field stores this in a specific format: "Bonus: X weeks - Reason"
+    """
     if not subscription:
         return None
     if subscription.is_bonus and subscription.admin_notes:
-        # Format: "Bonus: X weeks - Reason here"
+        # The note should be formatted like "Bonus: 4 weeks - Referral program reward"
         if ' - ' in subscription.admin_notes:
             return subscription.admin_notes.split(' - ', 1)[1]
         return subscription.admin_notes
     return None
 
 def get_owner_subscription_status(owner):
-    """Get current subscription status for owner"""
+    """
+    Build a complete picture of where this owner stands with their subscription.
+    Returns everything the frontend needs to show limits, remaining days, and features.
+    """
     from .models import OwnerSubscription
     
     try:
         subscription = OwnerSubscription.objects.filter(owner=owner, is_active=True).latest('created_at')
         
-        # ✅ Extract bonus reason
+        # See if there's a reason attached to any bonus weeks they received
         bonus_reason = extract_bonus_reason(subscription)
         
         return {
@@ -204,7 +236,6 @@ def get_owner_subscription_status(owner):
             'can_add_hostel': check_hostel_creation_eligibility(owner)[0],
             'can_feature': subscription.plan.can_feature_listings if subscription.plan else False,
             'has_analytics_access': subscription.plan.analytics_access if subscription.plan else False,
-            # ✅ ADDED BONUS FIELDS
             'is_bonus': subscription.is_bonus if subscription else False,
             'bonus_weeks': subscription.bonus_weeks if subscription else None,
             'bonus_reason': bonus_reason,
@@ -213,7 +244,7 @@ def get_owner_subscription_status(owner):
             'start_date': subscription.start_date if subscription else None,
         }
     except OwnerSubscription.DoesNotExist:
-        # Free tier
+        # This owner is on the basic free tier - no paid subscription at all
         current_month = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         hostels_this_month = owner.hostels.filter(created_at__gte=current_month).count()
         
@@ -223,7 +254,7 @@ def get_owner_subscription_status(owner):
             'plan_display': 'Free',
             'expires_at': None,
             'days_remaining': None,
-            'max_hostels': 1,
+            'max_hostels': 1,  # One hostel per month is the free offering
             'max_images_per_hostel': 6,
             'current_hostels': owner.hostels.count(),
             'can_add_hostel': hostels_this_month < 1,
