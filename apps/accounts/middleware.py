@@ -3,6 +3,7 @@ import logging
 import json
 from django.utils import timezone
 from django.http import JsonResponse
+from django.shortcuts import redirect
 from django.conf import settings
 from rest_framework import status
 from .models import User, AuditLog
@@ -254,6 +255,8 @@ class AuditLogMiddleware:
                 action = 'ADMIN_TOGGLE_USER_STATUS'
             elif 'settings' in path.lower():
                 action = 'ADMIN_UPDATE_SETTINGS'
+            elif 'maintenance' in path.lower():
+                action = 'ADMIN_MAINTENANCE_MODE'
             elif 'dashboard' in path.lower():
                 action = 'ADMIN_VIEW_DASHBOARD'
             elif 'stats' in path.lower():
@@ -640,20 +643,35 @@ class MaintenanceModeMiddleware:
             if request.user.role == 'admin' or request.user.is_superuser or request.user.is_staff:
                 return self.get_response(request)
         
-        # Rule 2: Certain paths are always allowed even during maintenance
-        allowed_paths = [
-            '/admin/',
-            '/api/admin/',
+        # Rule 2: Admin API endpoints MUST stay accessible during maintenance
+        # This is critical - otherwise admins get locked out and can't turn it off!
+        admin_api_paths = [
+            '/api/auth/settings/',
             '/api/auth/admin/',
-            '/api/auth/login/',
-            '/api/auth/logout/',
+            '/api/auth/dashboard/',
+            '/api/auth/audit-logs/',
+            '/api/auth/notifications/',
+            '/api/auth/profile/',
+            '/api/auth/students/',
+            '/api/auth/owners/',
+            '/api/auth/hostels/',
+            '/api/auth/bookings/',
+            '/api/auth/impersonate/',
+            '/api/admin/',
+            '/admin/',
             '/static/',
             '/media/',
         ]
         
-        for allowed in allowed_paths:
+        for allowed in admin_api_paths:
             if request.path.startswith(allowed):
-                return self.get_response(request)
+                # Double-check authentication for sensitive endpoints
+                if request.user.is_authenticated and (request.user.role == 'admin' or request.user.is_superuser):
+                    return self.get_response(request)
+                # If it's a public admin path like /admin/login/, still allow it
+                if '/login/' in request.path or '/static/' in request.path or '/media/' in request.path:
+                    return self.get_response(request)
+                break
         
         # Rule 3: Everyone else gets blocked and sees the maintenance message
         
