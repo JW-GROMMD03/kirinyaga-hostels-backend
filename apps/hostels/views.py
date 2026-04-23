@@ -23,6 +23,10 @@ from apps.accounts.models import AuditLog
 logger = logging.getLogger(__name__)
 
 def get_client_ip(request):
+    """
+    Figure out the actual IP address of whoever's making the request.
+    Handles proxies and load balancers by checking the forwarded headers first.
+    """
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
     if x_forwarded_for:
         ip = x_forwarded_for.split(',')[0]
@@ -32,13 +36,21 @@ def get_client_ip(request):
 
 
 class StandardResultsSetPagination(PageNumberPagination):
+    """
+    Standard pagination settings used across most list views.
+    Defaults to 12 items per page but lets the frontend request more or less.
+    """
     page_size = 12
     page_size_query_param = 'page_size'
     max_page_size = 100
 
 
 class HostelSearchView(generics.ListAPIView):
-    """Public view for searching approved hostels"""
+    """
+    The main search endpoint that students use to find hostels.
+    Anyone can access this - no login required.
+    Supports filtering by price, distance, room type, and amenities.
+    """
     serializer_class = HostelListSerializer
     permission_classes = [permissions.AllowAny]
     pagination_class = StandardResultsSetPagination
@@ -57,12 +69,17 @@ class HostelSearchView(generics.ListAPIView):
     ordering_fields = ['price', 'distance_to_university', 'created_at', 'views_count']
 
     def get_queryset(self):
+        """
+        Build the base queryset - only show approved and available hostels to the public.
+        Then apply any filters the user requested.
+        """
         queryset = Hostel.objects.filter(
             is_approved=True, 
             available=True
         ).select_related('owner').prefetch_related('images', 'amenities__amenity')
         
-        # Amenities: single comma-separated string → OR condition
+        # Handle amenity filtering - if they pass a comma-separated list of amenity IDs,
+        # we need to find hostels that have ANY of those (OR condition, not AND)
         amenities_param = self.request.query_params.get('amenities')
         if amenities_param:
             amenity_ids = amenities_param.split(',')
@@ -71,11 +88,13 @@ class HostelSearchView(generics.ListAPIView):
                 q_filter |= Q(amenities__amenity_id=aid)
             queryset = queryset.filter(q_filter).distinct()
         
+        # Location-based search - find hostels within a certain radius
         lat = self.request.query_params.get('lat')
         lng = self.request.query_params.get('lng')
         radius = self.request.query_params.get('radius')
         
         if lat and lng and radius:
+            # Rough conversion: 1 degree of latitude is about 111 km
             queryset = queryset.filter(
                 location_lat__range=(float(lat) - float(radius)/111, float(lat) + float(radius)/111),
                 location_lng__range=(float(lng) - float(radius)/111, float(lng) + float(radius)/111)
@@ -84,24 +103,29 @@ class HostelSearchView(generics.ListAPIView):
         return queryset.distinct()
 
     def get_serializer_context(self):
+        """Pass the request object to the serializer so it can build proper URLs."""
         context = super().get_serializer_context()
         context['request'] = self.request
         return context
 
 
 class HostelDetailView(generics.RetrieveAPIView):
-    """Public view for hostel details - owners can see their own unapproved hostels"""
+    """
+    Shows all the details for a single hostel.
+    Special case: owners can see their own hostels even if they're not approved yet.
+    Everyone else only sees approved and available hostels.
+    """
     serializer_class = HostelDetailSerializer
     permission_classes = [permissions.AllowAny]
 
     def get_queryset(self):
         user = self.request.user
         
-        # If user is authenticated and is the owner, show their hostels even if not approved
+        # Owners get to see their own stuff, approved or not
         if user.is_authenticated and user.role == 'owner':
             return Hostel.objects.filter(Q(is_approved=True, available=True) | Q(owner=user))
         
-        # For public (students, guests), only show approved and available hostels
+        # Everyone else only sees what's live and available
         return Hostel.objects.filter(is_approved=True, available=True)
 
     def get_serializer_context(self):
@@ -110,6 +134,10 @@ class HostelDetailView(generics.RetrieveAPIView):
         return context
 
     def retrieve(self, request, *args, **kwargs):
+        """
+        Override the default retrieve so we can increment the view counter
+        and log that someone looked at this hostel.
+        """
         instance = self.get_object()
         instance.increment_views()
         
@@ -127,7 +155,10 @@ class HostelDetailView(generics.RetrieveAPIView):
 
 
 class OwnerHostelListView(generics.ListAPIView):
-    """List all hostels for the logged-in owner"""
+    """
+    Shows an owner all the hostels they've listed.
+    Simple and straightforward - just their own properties.
+    """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = HostelListSerializer
 
@@ -188,7 +219,10 @@ class OwnerHostelListView(generics.ListAPIView):
 
 
 class OwnerHostelDetailView(generics.RetrieveAPIView):
-    """Get detailed information about a specific hostel (owner only)"""
+    """
+    Owners need to see their own hostel details for editing.
+    This endpoint makes sure they can only see their own properties.
+    """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = HostelDetailSerializer
 
@@ -204,6 +238,11 @@ class OwnerHostelDetailView(generics.RetrieveAPIView):
 
 
 class HostelCreateView(APIView):
+    """
+    The endpoint owners hit when they want to list a new hostel.
+    This is where all the subscription checks happen to make sure
+    they're allowed to add another property.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
@@ -212,54 +251,52 @@ class HostelCreateView(APIView):
         print(f"User: {request.user.email} (ID: {request.user.id})")
         print(f"User role: {request.user.role}")
         
-        # Check if user is owner
+        # First things first - only owners can list hostels
         if request.user.role != 'owner':
             raise PermissionDenied("Only owners can create hostels.")
         
-        # ========== SUBSCRIPTION CHECK ==========
-        # Check if owner can add a new hostel based on subscription
+        # ========== CHECK IF OWNER CAN ADD A HOSTEL ==========
+        # This function handles both free tier (1 per month) and paid plans
         can_add, message = check_hostel_creation_eligibility(request.user)
         
         if not can_add:
-            # Get subscription status for better error message
+            # Get their full subscription status so we can give them a helpful error
             status_data = get_owner_subscription_status(request.user)
             
             error_message = message
             if not status_data.get('has_active_subscription'):
-                error_message = f"{message} Please subscribe to continue adding hostels. <a href='/owner/subscription-plans.html'>View Plans</a>"
+                error_message = f"{message} You're on the free plan which gives you one listing per month. Need more? Check out our paid plans. <a href='/owner/subscription-plans.html'>View Plans</a>"
             elif status_data.get('plan') == 'free' and status_data.get('current_hostels', 0) >= 1:
-                error_message = f"{message} The Free plan allows only 1 hostel per month. Upgrade to add more hostels."
+                error_message = f"{message} You've already used your free listing for this month. Upgrade to add more whenever you want."
             elif status_data.get('max_hostels') and status_data.get('current_hostels', 0) >= status_data.get('max_hostels'):
-                error_message = f"{message} Your {status_data.get('plan_display')} plan allows up to {status_data.get('max_hostels')} hostels. Upgrade to add more."
+                error_message = f"{message} Your {status_data.get('plan_display')} plan maxes out at {status_data.get('max_hostels')} hostels. You'll need to upgrade to add more."
             
             return Response(
                 {'error': error_message, 'requires_subscription': True, 'subscription_status': status_data},
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Check subscription is active (additional check)
+        # ========== PAID PLAN LIMIT CHECK ==========
+        # Only do this extra check if they actually have a paid subscription.
+        # Free tier users don't have a subscription record at all, and that's fine.
         subscription = OwnerSubscription.objects.filter(
             owner=request.user,
             is_active=True,
             end_date__gte=timezone.now()
         ).first()
         
-        if not subscription:
-            return Response(
-                {'error': 'No active subscription found. Please subscribe to add hostels.', 'requires_subscription': True},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # Check plan limits
-        current_count = Hostel.objects.filter(owner=request.user).count()
-        if subscription.plan and subscription.plan.max_hostels > 0:
-            if current_count >= subscription.plan.max_hostels:
+        # If they're on a paid plan, make sure they haven't hit their cap
+        if subscription and subscription.plan and subscription.plan.name != 'free':
+            current_count = Hostel.objects.filter(owner=request.user).count()
+            if subscription.plan.max_hostels > 0 and current_count >= subscription.plan.max_hostels:
                 return Response(
-                    {'error': f'You have reached your plan limit of {subscription.plan.max_hostels} hostels. Upgrade your plan to add more.'},
+                    {'error': f"You've hit the limit for your {subscription.plan.display_name} plan ({subscription.plan.max_hostels} hostels). Time to upgrade?"},
                     status=status.HTTP_403_FORBIDDEN
                 )
+        
+        # If we made it this far, they're cleared to add their hostel!
 
-        # Prepare hostel data
+        # Gather up all the basic information about the hostel
         data = {
             'name': request.data.get('name'),
             'description': request.data.get('description', ''),
@@ -279,7 +316,7 @@ class HostelCreateView(APIView):
         print(f"Hostel created: {hostel.id}")
 
         try:
-            # Handle images
+            # Handle the photos they uploaded (up to 6)
             image_fields = ['photo1', 'photo2', 'photo3', 'photo4', 'photo5', 'photo6']
             for i, field in enumerate(image_fields):
                 if field in request.FILES:
@@ -290,11 +327,11 @@ class HostelCreateView(APIView):
                         hostel=hostel,
                         image=image_file,
                         description=description,
-                        is_primary=(i == 0)
+                        is_primary=(i == 0)  # First photo becomes the main one
                     )
                     print(f"Image uploaded: {field}")
 
-            # Handle amenities
+            # Save which amenities they selected
             amenities = request.data.getlist('amenities[]')
             if amenities:
                 for amenity_id in amenities:
@@ -304,7 +341,7 @@ class HostelCreateView(APIView):
                     )
                 print(f"Added {len(amenities)} amenities")
 
-            # Audit log
+            # Keep a record of this creation in the audit log
             AuditLog.objects.create(
                 user=request.user,
                 action='CREATE_HOSTEL',
@@ -324,7 +361,10 @@ class HostelCreateView(APIView):
 
 
 class HostelUpdateView(APIView):
-    """Update an existing hostel"""
+    """
+    Let owners edit their existing hostels.
+    Any update resets the approval status so admins can review the changes.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
@@ -336,18 +376,18 @@ class HostelUpdateView(APIView):
             hostel = Hostel.objects.get(pk=pk)
             print(f"Found hostel: {hostel.name}, Owner ID: {hostel.owner_id}")
             
+            # Security check - you can only edit your own hostels
             if hostel.owner != request.user:
                 print(f"Ownership check failed. Hostel owner: {hostel.owner_id}, Request user: {request.user.id}")
                 raise PermissionDenied("You can only edit your own hostels.")
             
-            # Check subscription for update (especially for featuring)
+            # Check if they're trying to feature this listing (paid feature)
             subscription = OwnerSubscription.objects.filter(
                 owner=request.user,
                 is_active=True,
                 end_date__gte=timezone.now()
             ).first()
             
-            # Check if trying to feature a listing
             if request.data.get('is_featured') and not subscription:
                 return Response(
                     {'error': 'You need an active subscription to feature listings. Please subscribe.'},
@@ -361,18 +401,19 @@ class HostelUpdateView(APIView):
                         status=status.HTTP_403_FORBIDDEN
                     )
             
-            # Update fields
+            # Update all the basic fields that changed
             for field in ['name', 'description', 'room_type', 'capacity', 'price', 
                          'deposit', 'utilities', 'address', 'location_lat', 'location_lng',
                          'distance_to_university', 'other_amenities', 'is_featured']:
                 if field in request.data:
                     setattr(hostel, field, request.data[field])
             
+            # Any update means the hostel needs to be reviewed again by admins
             hostel.is_approved = False
             hostel.save()
             print(f"Hostel updated successfully. Approval reset to False")
             
-            # Handle images
+            # Check if they uploaded any new photos
             image_fields = ['photo1', 'photo2', 'photo3', 'photo4', 'photo5', 'photo6']
             new_images = False
             for field in image_fields:
@@ -380,6 +421,7 @@ class HostelUpdateView(APIView):
                     new_images = True
                     break
             
+            # If they uploaded new photos, replace all the old ones
             if new_images:
                 hostel.images.all().delete()
                 for i, field in enumerate(image_fields):
@@ -395,7 +437,7 @@ class HostelUpdateView(APIView):
                         )
                         print(f"Image uploaded: {field}")
             
-            # Handle amenities
+            # Update the amenities list
             if 'amenities[]' in request.data:
                 amenities = request.data.getlist('amenities[]')
                 hostel.amenities.all().delete()
@@ -406,7 +448,7 @@ class HostelUpdateView(APIView):
                     )
                 print(f"Updated {len(amenities)} amenities")
             
-            # Audit log
+            # Log this update
             AuditLog.objects.create(
                 user=request.user,
                 action='UPDATE_HOSTEL',
@@ -432,7 +474,10 @@ class HostelUpdateView(APIView):
 
 
 class HostelDeleteView(APIView):
-    """Delete a hostel"""
+    """
+    Permanently remove a hostel listing.
+    Owners can only delete their own properties.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def delete(self, request, pk):
@@ -443,11 +488,12 @@ class HostelDeleteView(APIView):
             hostel = Hostel.objects.get(pk=pk)
             print(f"Found hostel: {hostel.name}, Owner ID: {hostel.owner_id}")
             
+            # Security - only the owner can delete their own hostel
             if hostel.owner != request.user:
                 print(f"Ownership check failed. Hostel owner: {hostel.owner_id}, Request user: {request.user.id}")
                 raise PermissionDenied("You can only delete your own hostels.")
             
-            # Audit log
+            # Log before we delete so we have a record
             AuditLog.objects.create(
                 user=request.user,
                 action='DELETE_HOSTEL',
@@ -476,7 +522,10 @@ class HostelDeleteView(APIView):
 
 
 class SavedHostelListCreateView(generics.ListCreateAPIView):
-    """List and create saved hostels for students"""
+    """
+    Students can save hostels to their favorites list.
+    This endpoint shows their saved hostels and lets them add new ones.
+    """
     serializer_class = SavedHostelSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -495,7 +544,9 @@ class SavedHostelListCreateView(generics.ListCreateAPIView):
 
 
 class SavedHostelDeleteView(generics.DestroyAPIView):
-    """Delete a saved hostel"""
+    """
+    Remove a hostel from the student's saved list.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
@@ -503,7 +554,10 @@ class SavedHostelDeleteView(generics.DestroyAPIView):
 
 
 class RecommendedHostelsView(generics.ListAPIView):
-    """Get recommended hostels based on user preferences"""
+    """
+    Smart recommendations for students based on their profile preferences.
+    Uses their budget range if they've set one up.
+    """
     serializer_class = HostelListSerializer
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = StandardResultsSetPagination
@@ -515,6 +569,7 @@ class RecommendedHostelsView(generics.ListAPIView):
             available=True
         ).select_related('owner').prefetch_related('images', 'amenities__amenity')
         
+        # If the student has set a budget, use it to filter recommendations
         if hasattr(user, 'student_profile') and user.student_profile:
             profile = user.student_profile
             if profile.budget_min and profile.budget_max:
@@ -523,6 +578,7 @@ class RecommendedHostelsView(generics.ListAPIView):
                     price__lte=profile.budget_max
                 )
         
+        # Featured hostels first, then newest
         return base_qs.order_by('-is_featured', '-created_at')[:20]
 
     def get_serializer_context(self):
@@ -532,7 +588,10 @@ class RecommendedHostelsView(generics.ListAPIView):
 
 
 class AmenityListView(generics.ListAPIView):
-    """List all amenities"""
+    """
+    Simple list of all available amenities that owners can select from.
+    Used to populate the checkboxes on the add hostel form.
+    """
     queryset = Amenity.objects.all().order_by('name')
     serializer_class = AmenitySerializer
     permission_classes = [permissions.AllowAny]
@@ -540,7 +599,10 @@ class AmenityListView(generics.ListAPIView):
 
 
 class HostelReviewListCreateView(generics.ListCreateAPIView):
-    """List and create reviews for a hostel"""
+    """
+    Students can leave reviews on hostels they've experienced.
+    Only approved reviews are shown to the public.
+    """
     serializer_class = HostelReviewSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -556,6 +618,7 @@ class HostelReviewListCreateView(generics.ListCreateAPIView):
         try:
             hostel = Hostel.objects.get(id=hostel_id, is_approved=True)
             
+            # One review per student per hostel
             if HostelReview.objects.filter(hostel=hostel, user=self.request.user).exists():
                 raise PermissionDenied("You have already reviewed this hostel.")
             
@@ -566,7 +629,10 @@ class HostelReviewListCreateView(generics.ListCreateAPIView):
 
 
 class AvailabilityView(generics.ListCreateAPIView):
-    """Manage hostel availability (for owners)"""
+    """
+    Owners can mark specific dates when their hostel is available or booked.
+    Helps students see real-time availability.
+    """
     serializer_class = AvailabilitySerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -596,7 +662,10 @@ class AvailabilityView(generics.ListCreateAPIView):
 
 
 class HostelStatsView(APIView):
-    """Get statistics for owner's hostels including subscription info"""
+    """
+    Dashboard stats for owners - shows them how their hostels are performing.
+    Includes view counts, ratings, and their current subscription status.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -625,7 +694,7 @@ class HostelStatsView(APIView):
             updated_at__gte=timezone.now() - timezone.timedelta(days=30)
         ).aggregate(total=Sum('views_count'))['total'] or 0
         
-        # Get subscription status
+        # Include subscription info so the frontend knows their limits
         subscription_status = get_owner_subscription_status(request.user)
         
         print(f"Stats - Total: {total}, Approved: {approved}, Pending: {pending}, Featured: {featured}")
@@ -643,7 +712,10 @@ class HostelStatsView(APIView):
 
 
 class CheckHostelLimitView(APIView):
-    """Check if owner can add more hostels based on subscription"""
+    """
+    Quick check endpoint for the frontend to see if an owner can add another hostel.
+    Returns all the relevant limit information in one clean response.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
