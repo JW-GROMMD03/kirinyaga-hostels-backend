@@ -1555,81 +1555,82 @@ class SystemSettingsView(APIView):
             }
         })
 
-    def post(self, request):
-        try:
-            settings_obj = SystemSettings.get_settings()
+def post(self, request):
+    try:
+        settings_obj = SystemSettings.get_settings()
+        
+        if 'site_name' in request.data:
+            settings_obj.site_name = request.data['site_name']
+        if 'admin_email' in request.data:
+            settings_obj.admin_email = request.data['admin_email']
+        if 'contact_phone' in request.data:
+            settings_obj.contact_phone = request.data['contact_phone']
+        if 'max_login_attempts' in request.data:
+            settings_obj.max_login_attempts = int(request.data['max_login_attempts'])
+        if 'admin_max_attempts' in request.data:
+            settings_obj.admin_max_attempts = int(request.data['admin_max_attempts'])
+        if 'lockout_hours' in request.data:
+            settings_obj.lockout_hours = int(request.data['lockout_hours'])
+        if 'twofa_required' in request.data:
+            settings_obj.twofa_required = bool(request.data['twofa_required'])
+        if 'session_timeout' in request.data:
+            settings_obj.session_timeout = int(request.data['session_timeout'])
+        
+        # Handle maintenance mode toggle with proper timestamp tracking
+        if 'maintenance_mode' in request.data:
+            new_mode = bool(request.data['maintenance_mode'])
+            # If turning ON and it was previously OFF, record the start time
+            if new_mode and not settings_obj.maintenance_mode:
+                settings_obj.maintenance_started_at = timezone.now()
+            # If turning OFF, clear the start time
+            elif not new_mode:
+                settings_obj.maintenance_started_at = None
+            settings_obj.maintenance_mode = new_mode
             
-            if 'site_name' in request.data:
-                settings_obj.site_name = request.data['site_name']
-            if 'admin_email' in request.data:
-                settings_obj.admin_email = request.data['admin_email']
-            if 'contact_phone' in request.data:
-                settings_obj.contact_phone = request.data['contact_phone']
-            if 'max_login_attempts' in request.data:
-                settings_obj.max_login_attempts = int(request.data['max_login_attempts'])
-            if 'admin_max_attempts' in request.data:
-                settings_obj.admin_max_attempts = int(request.data['admin_max_attempts'])
-            if 'lockout_hours' in request.data:
-                settings_obj.lockout_hours = int(request.data['lockout_hours'])
-            if 'twofa_required' in request.data:
-                settings_obj.twofa_required = bool(request.data['twofa_required'])
-            if 'session_timeout' in request.data:
-                settings_obj.session_timeout = int(request.data['session_timeout'])
-            
-            
-            if 'maintenance_mode' in request.data:
-                new_mode = bool(request.data['maintenance_mode'])
-                 # If turning ON, record the start time
-                if new_mode and not settings_obj.maintenance_mode:
-                    settings_obj.maintenance_started_at = timezone.now()
-                  # If turning OFF, clear the start time
-                elif not new_mode:
-                    settings_obj.maintenance_started_at = None
-                settings_obj.maintenance_mode = bool(request.data['maintenance_mode'])
-            if 'maintenance_message' in request.data:
-                settings_obj.maintenance_message = request.data['maintenance_message']
-            if 'maintenance_estimated_time' in request.data:
-                settings_obj.maintenance_estimated_time = request.data['maintenance_estimated_time']
-            
-            features = request.data.get('features', {})
-            if features:
-                if 'roommate_finder' in features:
-                    settings_obj.roommate_finder_enabled = bool(features['roommate_finder'])
-                if 'student_reviews' in features:
-                    settings_obj.student_reviews_enabled = bool(features['student_reviews'])
-                if 'owner_chat' in features:
-                    settings_obj.owner_chat_enabled = bool(features['owner_chat'])
-                if 'subscriptions' in features:
-                    settings_obj.subscriptions_enabled = bool(features['subscriptions'])
-                if 'google_maps' in features:
-                    settings_obj.google_maps_enabled = bool(features['google_maps'])
-                if 'notifications' in features:
-                    settings_obj.notifications_enabled = bool(features['notifications'])
-            
-            settings_obj.updated_by = request.user
-            settings_obj.save()
-            
-            AuditLog.objects.create(
-                user=request.user,
-                action='UPDATE_SYSTEM_SETTINGS',
-                action_category='admin',
-                ip_address=get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                details={
-                    'maintenance_mode': settings_obj.maintenance_mode,
-                    'updated_by': request.user.email
-                }
-            )
-            
-            return Response({
-                'status': 'success', 
-                'message': 'Settings saved successfully',
-                'maintenance_mode': settings_obj.maintenance_mode
-            })
-            
-        except Exception as e:
-            logger.error(f"Error saving system settings: {e}", exc_info=True)
-            return Response({'error': str(e)}, status=500)
+        if 'maintenance_message' in request.data:
+            settings_obj.maintenance_message = request.data['maintenance_message']
+        if 'maintenance_estimated_time' in request.data:
+            settings_obj.maintenance_estimated_time = request.data['maintenance_estimated_time']
+        
+        features = request.data.get('features', {})
+        if features:
+            if 'roommate_finder' in features:
+                settings_obj.roommate_finder_enabled = bool(features['roommate_finder'])
+            if 'student_reviews' in features:
+                settings_obj.student_reviews_enabled = bool(features['student_reviews'])
+            if 'owner_chat' in features:
+                settings_obj.owner_chat_enabled = bool(features['owner_chat'])
+            if 'subscriptions' in features:
+                settings_obj.subscriptions_enabled = bool(features['subscriptions'])
+            if 'google_maps' in features:
+                settings_obj.google_maps_enabled = bool(features['google_maps'])
+            if 'notifications' in features:
+                settings_obj.notifications_enabled = bool(features['notifications'])
+        
+        settings_obj.updated_by = request.user
+        settings_obj.save()
+        
+        AuditLog.objects.create(
+            user=request.user,
+            action='UPDATE_SYSTEM_SETTINGS',
+            action_category='admin',
+            ip_address=get_client_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            details={
+                'maintenance_mode': settings_obj.maintenance_mode,
+                'updated_by': request.user.email
+            }
+        )
+        
+        return Response({
+            'status': 'success', 
+            'message': 'Settings saved successfully',
+            'maintenance_mode': settings_obj.maintenance_mode
+        })
+        
+    except Exception as e:
+        logger.error(f"Error saving system settings: {e}", exc_info=True)
+        return Response({'error': str(e)}, status=500)
 
 # ==================== ANALYTICS ====================
 class UserAnalyticsView(APIView):

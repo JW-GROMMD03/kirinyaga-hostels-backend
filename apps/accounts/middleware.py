@@ -654,6 +654,7 @@ class MaintenanceModeMiddleware:
             '/api/auth/hostels/',
             '/api/auth/bookings/',
             '/api/auth/impersonate/',
+            '/api/auth/sms/',
             '/api/admin/',
             '/admin/',
             '/static/',
