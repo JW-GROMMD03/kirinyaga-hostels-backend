@@ -634,7 +634,7 @@ class MaintenanceModeMiddleware:
         if not maintenance_mode:
             return self.get_response(request)
         
-        # ========== MAINTENANCE MODE IS ON ==========
+               # ========== MAINTENANCE MODE IS ON ==========
         
         # RULE 1: Admin users ALWAYS get full access
         if request.user.is_authenticated:
@@ -663,13 +663,17 @@ class MaintenanceModeMiddleware:
         
         for allowed in admin_api_paths:
             if request.path.startswith(allowed):
+                # Check #1: Authenticated admin? Let them through immediately
                 if request.user.is_authenticated and (request.user.role == 'admin' or request.user.is_superuser):
                     return self.get_response(request)
+                # Check #2: Public paths like login and static files are always accessible
                 if '/login/' in request.path or '/static/' in request.path or '/media/' in request.path:
                     return self.get_response(request)
-                
+                # Check #3: Admin API paths need to reach their views
+                # The view's own permission check (IsAdminUser) will handle authentication
+                return self.get_response(request)
         
-        #  RULE 3: Login endpoints - return maintenance status (not "invalid password")
+        # RULE 3: Login endpoints - return maintenance status (not "invalid password")
         is_login_attempt = '/login/' in request.path and request.method == 'POST'
         
         # Check if this is an API request
