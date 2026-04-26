@@ -667,7 +667,7 @@ class MaintenanceModeMiddleware:
                     return self.get_response(request)
                 if '/login/' in request.path or '/static/' in request.path or '/media/' in request.path:
                     return self.get_response(request)
-                break
+                
         
         #  RULE 3: Login endpoints - return maintenance status (not "invalid password")
         is_login_attempt = '/login/' in request.path and request.method == 'POST'
