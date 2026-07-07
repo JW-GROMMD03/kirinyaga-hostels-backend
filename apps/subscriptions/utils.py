@@ -8,7 +8,7 @@ from django.utils import timezone
 
 def generate_password(shortcode, passkey, timestamp):
     """
-    Safaricom needs a base64-encodede from the shortcode, passkey, and timestamp.
+    Safaricom needs a base64-encoded string from the shortcode, passkey, and timestamp.
     We mash them together and encode them before every API call.
     """
     data_to_encode = shortcode + passkey + timestamp
@@ -19,15 +19,13 @@ def generate_password(shortcode, passkey, timestamp):
 def get_access_token():
     """
     Grab an OAuth token from Safaricom. Every M-Pesa API call needs one of these.
-    Switches between sandbox and production automatically based on your settings.
+    Uses production URL always (since we're going live).
     """
     consumer_key = settings.MPESA_CONSUMER_KEY
     consumer_secret = settings.MPESA_CONSUMER_SECRET
 
-    if settings.MPESA_ENVIRONMENT == 'production':
-        api_url = "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
-    else:
-        api_url = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
+    # PRODUCTION ONLY - no sandbox
+    api_url = "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
 
     try:
         response = requests.get(api_url, auth=(consumer_key, consumer_secret), timeout=15)
@@ -35,16 +33,16 @@ def get_access_token():
         result = response.json()
         access_token = result.get('access_token')
         if not access_token:
-            print("M-Pesa did not return an access token. Check your consumer key and secret.")
+            print("❌ M-Pesa did not return an access token. Check your consumer key and secret.")
         return access_token
     except requests.exceptions.Timeout:
-        print("M-Pesa auth request timed out. Safaricom servers might be slow right now.")
+        print("❌ M-Pesa auth request timed out. Safaricom servers might be slow right now.")
         return None
     except requests.exceptions.ConnectionError:
-        print("Cannot reach Safaricom servers. Check your internet connection.")
+        print("❌ Cannot reach Safaricom servers. Check your internet connection.")
         return None
     except Exception as e:
-        print(f"M-Pesa auth error: {e}")
+        print(f"❌ M-Pesa auth error: {e}")
         return None
 
 
@@ -60,10 +58,8 @@ def stk_push(phone_number, amount, account_reference, transaction_desc, callback
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     password = generate_password(settings.MPESA_SHORTCODE, settings.MPESA_PASSKEY, timestamp)
 
-    if settings.MPESA_ENVIRONMENT == 'production':
-        api_url = "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
-    else:
-        api_url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
+    # PRODUCTION ONLY
+    api_url = "https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
 
     headers = {
         'Authorization': f'Bearer {access_token}',
@@ -79,14 +75,15 @@ def stk_push(phone_number, amount, account_reference, transaction_desc, callback
     if not clean_phone.startswith('254'):
         clean_phone = '254' + clean_phone
 
+    # PRODUCTION: Use CustomerBuyGoodsOnline for Till Numbers
     payload = {
-        'BusinessShortCode': settings.MPESA_SHORTCODE,
+        'BusinessShortCode': settings.MPESA_SHORTCODE,  # 9270154
         'Password': password,
         'Timestamp': timestamp,
         'TransactionType': 'CustomerBuyGoodsOnline',  # Till number uses this
         'Amount': int(amount),
         'PartyA': clean_phone,
-        'PartyB': settings.MPESA_SHORTCODE,
+        'PartyB': settings.MPESA_SHORTCODE,  # 9270154
         'PhoneNumber': clean_phone,
         'CallBackURL': callback_url,
         'AccountReference': account_reference[:12],
@@ -99,16 +96,16 @@ def stk_push(phone_number, amount, account_reference, transaction_desc, callback
 
         response_code = result.get('ResponseCode', '')
         if response_code == '0':
-            print(f"STK push sent successfully to {clean_phone}")
+            print(f"✅ STK push sent successfully to {clean_phone}")
         else:
-            print(f"STK push rejected by Safaricom: {result.get('ResponseDescription', result)}")
+            print(f"❌ STK push rejected by Safaricom: {result.get('ResponseDescription', result)}")
 
         return result
     except requests.exceptions.Timeout:
-        print("STK push timed out. Safaricom might be slow.")
+        print("❌ STK push timed out. Safaricom might be slow.")
         return {'success': False, 'message': 'M-Pesa is taking too long. Please try again.'}
     except Exception as e:
-        print(f"STK push failed: {e}")
+        print(f"❌ STK push failed: {e}")
         return {'success': False, 'message': 'Could not initiate payment. Try again shortly.'}
 
 
@@ -124,10 +121,8 @@ def check_transaction_status(checkout_request_id):
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     password = generate_password(settings.MPESA_SHORTCODE, settings.MPESA_PASSKEY, timestamp)
 
-    if settings.MPESA_ENVIRONMENT == 'production':
-        api_url = "https://api.safaricom.co.ke/mpesa/stkpushquery/v1/query"
-    else:
-        api_url = "https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query"
+    # PRODUCTION ONLY
+    api_url = "https://api.safaricom.co.ke/mpesa/stkpushquery/v1/query"
 
     headers = {
         'Authorization': f'Bearer {access_token}',
@@ -146,7 +141,7 @@ def check_transaction_status(checkout_request_id):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        print(f"Status check failed: {e}")
+        print(f"❌ Status check failed: {e}")
         return None
 
 
