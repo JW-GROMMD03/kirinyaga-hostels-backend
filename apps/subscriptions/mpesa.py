@@ -27,11 +27,7 @@ def verify_safaricom_ip(request):
     """
     Only accept callbacks from known Safaricom IP addresses.
     Stops random people from faking payment confirmations.
-    In sandbox mode, we skip this since callbacks come from your own server.
     """
-    if settings.MPESA_ENVIRONMENT == 'sandbox':
-        return True
-
     client_ip = request.META.get('REMOTE_ADDR', '')
     x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR', '')
 
@@ -41,7 +37,11 @@ def verify_safaricom_ip(request):
     if client_ip in SAFARICOM_IPS:
         return True
 
-    logger.warning(f"Callback from untrusted IP: {client_ip}")
+    # Allow local testing (remove in production)
+    if client_ip in ['127.0.0.1', 'localhost'] and settings.DEBUG:
+        return True
+
+    logger.warning(f"⚠️ Callback from untrusted IP: {client_ip}")
     return False
 
 
@@ -58,7 +58,7 @@ def mpesa_callback(request):
 
     try:
         data = json.loads(request.body)
-        logger.info(f"M-Pesa Callback: {json.dumps(data, indent=2)}")
+        logger.info(f"📱 M-Pesa Callback: {json.dumps(data, indent=2)}")
 
         body = data.get('Body', {})
         stk_callback = body.get('stkCallback', {})
@@ -68,7 +68,7 @@ def mpesa_callback(request):
         checkout_request_id = stk_callback.get('CheckoutRequestID')
 
         if not checkout_request_id:
-            logger.error("Callback missing CheckoutRequestID")
+            logger.error("❌ Callback missing CheckoutRequestID")
             return JsonResponse({'ResultCode': 1, 'ResultDesc': 'Missing CheckoutRequestID'})
 
         try:
@@ -76,12 +76,12 @@ def mpesa_callback(request):
                 'subscription', 'subscription__owner', 'subscription__plan'
             ).get(transaction_id=checkout_request_id)
         except PaymentTransaction.DoesNotExist:
-            logger.error(f"No transaction found for {checkout_request_id}")
+            logger.error(f"❌ No transaction found for {checkout_request_id}")
             return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Not found, acknowledged'})
 
         # Don't process the same transaction twice
         if transaction_obj.status in ('completed', 'failed'):
-            logger.info(f"Transaction {checkout_request_id} already processed as {transaction_obj.status}")
+            logger.info(f"⚠️ Transaction {checkout_request_id} already processed as {transaction_obj.status}")
             return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Already processed'})
 
         subscription = transaction_obj.subscription
@@ -105,7 +105,7 @@ def mpesa_callback(request):
                 elif name == 'PhoneNumber':
                     phone_number = value
 
-            logger.info(f"Payment confirmed - Receipt: {mpesa_receipt}, Amount: {amount_paid}")
+            logger.info(f"✅ Payment confirmed - Receipt: {mpesa_receipt}, Amount: {amount_paid}")
 
             transaction_obj.status = 'completed'
             transaction_obj.mpesa_receipt = mpesa_receipt
@@ -138,10 +138,10 @@ def mpesa_callback(request):
                 performed_by=subscription.owner
             )
 
-            logger.info(f"Subscription activated for {subscription.owner.email}")
+            logger.info(f"✅ Subscription activated for {subscription.owner.email}")
 
         else:
-            logger.warning(f"Payment failed: {result_desc}")
+            logger.warning(f"❌ Payment failed: {result_desc}")
 
             transaction_obj.status = 'failed'
             transaction_obj.response_description = result_desc
@@ -160,10 +160,10 @@ def mpesa_callback(request):
         return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Processed'})
 
     except json.JSONDecodeError:
-        logger.error("Invalid JSON in callback")
+        logger.error("❌ Invalid JSON in callback")
         return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Invalid data, acknowledged'})
     except Exception as e:
-        logger.error(f"Callback error: {e}", exc_info=True)
+        logger.error(f"❌ Callback error: {e}", exc_info=True)
         return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Error, acknowledged'})
 
 
@@ -187,7 +187,7 @@ def initiate_mpesa_payment(owner, plan, phone_number):
         'https://kirinyaga-hostels-backend.onrender.com/api/subscriptions/mpesa/callback/'
     )
 
-    logger.info(f"Initiating M-Pesa: phone={clean_phone}, amount={plan.price_kes}, till={settings.MPESA_SHORTCODE}")
+    logger.info(f"📱 Initiating M-Pesa: phone={clean_phone}, amount={plan.price_kes}, till={settings.MPESA_SHORTCODE}")
 
     result = stk_push(
         phone_number=clean_phone,
@@ -209,7 +209,7 @@ def initiate_mpesa_payment(owner, plan, phone_number):
         error_msg = result.get('ResponseDescription', result.get('errorMessage', 'Payment could not be started'))
         if not error_msg and result:
             error_msg = str(result)
-        logger.error(f"Payment initiation failed: {error_msg}")
+        logger.error(f"❌ Payment initiation failed: {error_msg}")
         return {
             'success': False,
             'message': error_msg
