@@ -454,7 +454,7 @@ else:
 # ============================================
 # M-PESA CONFIGURATION - TILL NUMBER 9270154
 # ============================================
-MPESA_ENVIRONMENT = os.getenv('MPESA_ENVIRONMENT', 'sandbox')
+MPESA_ENVIRONMENT = os.getenv('MPESA_ENVIRONMENT', 'production')
 MPESA_CONSUMER_KEY = os.getenv('MPESA_CONSUMER_KEY', '')
 MPESA_CONSUMER_SECRET = os.getenv('MPESA_CONSUMER_SECRET', '')
 MPESA_SHORTCODE = os.getenv('MPESA_SHORTCODE', '9270154')
