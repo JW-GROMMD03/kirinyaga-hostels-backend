@@ -83,7 +83,7 @@ def stk_push(phone_number, amount, account_reference, transaction_desc, callback
         'BusinessShortCode': settings.MPESA_SHORTCODE,
         'Password': password,
         'Timestamp': timestamp,
-        'TransactionType': 'CustomerPayBillOnline', # Till number uses this
+        'TransactionType': 'CustomerBuyGoodsOnline',  # Till number uses this
         'Amount': int(amount),
         'PartyA': clean_phone,
         'PartyB': settings.MPESA_SHORTCODE,
