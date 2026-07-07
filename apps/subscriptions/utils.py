@@ -8,7 +8,7 @@ from django.utils import timezone
 
 def generate_password(shortcode, passkey, timestamp):
     """
-    Safaricom needs a base64-encoded string made from the shortcode, passkey, and timestamp.
+    Safaricom needs a base64-encodede from the shortcode, passkey, and timestamp.
     We mash them together and encode them before every API call.
     """
     data_to_encode = shortcode + passkey + timestamp
@@ -83,7 +83,7 @@ def stk_push(phone_number, amount, account_reference, transaction_desc, callback
         'BusinessShortCode': settings.MPESA_SHORTCODE,
         'Password': password,
         'Timestamp': timestamp,
-        'TransactionType': 'CustomerBuyGoodsOnline',  # Till number uses this
+        'TransactionType': 'CustomerPayBillOnline', # Till number uses this
         'Amount': int(amount),
         'PartyA': clean_phone,
         'PartyB': settings.MPESA_SHORTCODE,
