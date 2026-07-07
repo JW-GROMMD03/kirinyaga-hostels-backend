@@ -37,11 +37,11 @@ INSTALLED_APPS = [
     # Third party
     'rest_framework',
     'rest_framework_simplejwt',
-    'corsheaders',  # Only once!
+    'corsheaders',
     'phonenumber_field',
     'anymail',
     'django_filters',
-    'whitenoise.runserver_nostatic',  # For static files in production
+    'whitenoise.runserver_nostatic',
     
     # Cloudinary
     'cloudinary',
@@ -63,7 +63,7 @@ INSTALLED_APPS = [
 # MIDDLEWARE
 # ============================================
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  # Must be FIRST
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -104,13 +104,11 @@ TEMPLATES = [
 WSGI_APPLICATION = 'core.wsgi.application'
 
 # ============================================
-# DATABASE - Use DATABASE_URL for production
+# DATABASE
 # ============================================
-# Try to use DATABASE_URL from environment (Render/Supabase)
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 if DATABASE_URL:
-    # Production database (Supabase, Render PostgreSQL, etc.)
     DATABASES = {
         'default': dj_database_url.config(
             default=os.environ.get('DATABASE_URL'),
@@ -119,7 +117,6 @@ if DATABASE_URL:
         )
     }
 else:
-    # Local development database
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
@@ -153,19 +150,10 @@ FREE_TIER_LIMITS = {
 # AUTHENTICATION
 # ============================================
 AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-        'OPTIONS': {'min_length': 8}
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
+    {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator', 'OPTIONS': {'min_length': 8}},
+    {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
 AUTH_USER_MODEL = 'accounts.User'
@@ -225,9 +213,8 @@ SIMPLE_JWT = {
 }
 
 # ============================================
-# CORS SETTINGS - FIXED VERSION
+# CORS SETTINGS
 # ============================================
-
 CORS_ALLOWED_ORIGINS = [
     'https://kirinyaga-hostels-frontend.onrender.com',
     'http://localhost:5500',
@@ -239,10 +226,8 @@ CORS_ALLOWED_ORIGINS = [
     'https://kirinyaga-hostels-backend.onrender.com',
 ]
 
-# Add frontend Render URL
 CORS_ALLOWED_ORIGINS.append('https://kirinyaga-hostels-frontend.onrender.com')
 
-# Add from environment variable (if set)
 env_origins = os.getenv('CORS_ALLOWED_ORIGINS', '')
 if env_origins:
     for origin in env_origins.split(','):
@@ -257,7 +242,6 @@ CORS_ALLOW_HEADERS = [
     'dnt', 'origin', 'user-agent', 'x-csrftoken', 'x-requested-with',
 ]
 
-# Print CORS settings for debugging (will appear in Render logs)
 print(f"🌐 CORS_ALLOWED_ORIGINS: {CORS_ALLOWED_ORIGINS}")
 
 CSRF_TRUSTED_ORIGINS = [origin.rstrip('/') for origin in CORS_ALLOWED_ORIGINS]
@@ -270,38 +254,28 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 
 # ============================================
-# EMAIL CONFIGURATION - Brevo (Sendinblue) API
+# EMAIL CONFIGURATION - Brevo API
 # ============================================
-
-# Use Brevo API via django-anymail (works on Render free tier)
-# Brevo gives 300 free emails/day - perfect for OTP, password reset, etc.
-
 if os.environ.get('RENDER'):
-    # Production - Use Brevo API
     EMAIL_BACKEND = "anymail.backends.brevo.EmailBackend"
     ANYMAIL = {
         "BREVO_API_KEY": os.environ.get('BREVO_API_KEY', ''),
     }
     DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@kirinyagahostels.com')
-    
-    # Verify we have the API key
     if not os.environ.get('BREVO_API_KEY'):
         print("⚠️ BREVO_API_KEY not set - email will not work!")
     else:
         print("📧 Using Brevo email backend with API")
 else:
-    # Local development - use console backend (prints emails to terminal)
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
     DEFAULT_FROM_EMAIL = 'noreply@kirinyagahostels.com'
     print("📧 Local development - using console email backend")
 
-# Keep these for compatibility
 ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', 'admin@kirinyagahostels.com')
 EMAIL_USE_LOCALTIME = True
 EMAIL_TIMEOUT = 30
 EMAIL_MULTIPART = True
 
-# Print email status for debugging
 print(f"📧 EMAIL BACKEND: {EMAIL_BACKEND}")
 print(f"📧 DEFAULT FROM: {DEFAULT_FROM_EMAIL}")
 
@@ -365,8 +339,8 @@ PASSWORD_HASHERS = [
 # ============================================
 # FILE UPLOAD SETTINGS
 # ============================================
-FILE_UPLOAD_MAX_MEMORY_SIZE = 5242880  # 5MB
-DATA_UPLOAD_MAX_MEMORY_SIZE = 5242880  # 5MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5242880
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5242880
 FILE_UPLOAD_PERMISSIONS = 0o644
 
 # ============================================
@@ -471,7 +445,6 @@ SUPABASE_STORAGE_BUCKET = os.getenv('SUPABASE_STORAGE_BUCKET', 'hostel-images')
 ADMIN_ALLOWED_IPS = os.getenv('ADMIN_ALLOWED_IPS', '').split(',')
 ADMIN_ALLOWED_IPS = [ip.strip() for ip in ADMIN_ALLOWED_IPS if ip.strip()]
 
-# In development, allow all
 if DEBUG:
     ADMIN_ALLOWED_IPS = []
     print(f"🔒 Admin IP Whitelist: ALLOW ALL (development mode)")
@@ -479,14 +452,16 @@ else:
     print(f"🔒 Admin IP Whitelist: {ADMIN_ALLOWED_IPS if ADMIN_ALLOWED_IPS else 'ALLOW ALL (no restrictions)'}")
 
 # ============================================
-# M-PESA CONFIGURATION (ADD THIS SECTION)
+# M-PESA CONFIGURATION - TILL NUMBER 9270154
 # ============================================
-MPESA_CONSUMER_KEY = os.getenv('MPESA_CONSUMER_KEY')
-MPESA_CONSUMER_SECRET = os.getenv('MPESA_CONSUMER_SECRET')
-MPESA_PASSKEY = os.getenv('MPESA_PASSKEY')
-MPESA_SHORTCODE = os.getenv('MPESA_SHORTCODE')
 MPESA_ENVIRONMENT = os.getenv('MPESA_ENVIRONMENT', 'sandbox')
-MPESA_CALLBACK_URL = os.getenv('MPESA_CALLBACK_URL', 'https://kirinyaga-hostels-backend.onrender.com')
+MPESA_CONSUMER_KEY = os.getenv('MPESA_CONSUMER_KEY', '')
+MPESA_CONSUMER_SECRET = os.getenv('MPESA_CONSUMER_SECRET', '')
+MPESA_SHORTCODE = os.getenv('MPESA_SHORTCODE', '9270154')
+MPESA_PASSKEY = os.getenv('MPESA_PASSKEY', '')
+MPESA_CALLBACK_URL = os.getenv('MPESA_CALLBACK_URL', 'https://kirinyaga-hostels-backend.onrender.com/api/subscriptions/mpesa/callback/')
+MPESA_INITIATOR_NAME = os.getenv('MPESA_INITIATOR_NAME', 'Kirinyaga Hostels')
 
 print(f"📱 M-Pesa Environment: {MPESA_ENVIRONMENT}")
+print(f"📱 M-Pesa Shortcode: {MPESA_SHORTCODE}")
 print(f"📱 M-Pesa Callback URL: {MPESA_CALLBACK_URL}")
