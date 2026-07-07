@@ -83,10 +83,10 @@ def stk_push(phone_number, amount, account_reference, transaction_desc, callback
         'BusinessShortCode': settings.MPESA_SHORTCODE,
         'Password': password,
         'Timestamp': timestamp,
-        'TransactionType': 'CustomerBuyGoodsOnline',  # Till number uses this, not CustomerPayBillOnline
+        'TransactionType': 'CustomerBuyGoodsOnline',  # Till number uses this
         'Amount': int(amount),
         'PartyA': clean_phone,
-        'PartyB': settings.MPESA_SHORTCODE,  # Your till number: 9270154
+        'PartyB': settings.MPESA_SHORTCODE,
         'PhoneNumber': clean_phone,
         'CallBackURL': callback_url,
         'AccountReference': account_reference[:12],
@@ -97,7 +97,6 @@ def stk_push(phone_number, amount, account_reference, transaction_desc, callback
         response = requests.post(api_url, json=payload, headers=headers, timeout=30)
         result = response.json()
 
-        # Log the response for debugging
         response_code = result.get('ResponseCode', '')
         if response_code == '0':
             print(f"STK push sent successfully to {clean_phone}")
